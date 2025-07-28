@@ -15,6 +15,10 @@ from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer 
 
+# NEW: Import Plotly for fancy visualizations
+import plotly.express as px
+import plotly.graph_objects as go
+
 # --- Initialize session state variables using setdefault for robustness ---
 st.session_state.setdefault('scored_data', pd.DataFrame())
 st.session_state.setdefault('analyze_triggered', False)
@@ -384,6 +388,66 @@ if 'scored_data' in st.session_state and not st.session_state['scored_data'].emp
 
     st.subheader("Full Loan Data with Scores and Decisions")
     st.dataframe(df_display)
+
+    # NEW: Dashboard Visualizations Section
+    st.header("Loan Performance Dashboard")
+    st.markdown("Dive into the top-performing and most vulnerable loans with interactive charts.")
+
+    # Create two columns for side-by-side charts
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.subheader("Top 10 Approved Loans (Highest Scores)")
+        # Sort by Score descending and get the top 10
+        top_10_loans = df_display.sort_values(by='Score', ascending=False).head(10)
+        
+        # Create a Plotly bar chart
+        fig_top10 = px.bar(
+            top_10_loans,
+            x='LOAN',
+            y='Score',
+            color='Decision', # Color bars by approval/rejection
+            color_discrete_map={'Approved': '#4CAF50', 'Rejected': '#f44336'}, # Custom colors
+            title='Top 10 Loans by Credit Score',
+            labels={'LOAN': 'Loan ID', 'Score': 'Credit Score'},
+            hover_data=['REASON', 'JOB', 'DEBTINC'] # Show additional info on hover
+        )
+        fig_top10.update_layout(xaxis_tickangle=-45) # Angle x-axis labels for readability
+        st.plotly_chart(fig_top10, use_container_width=True)
+
+    with col2:
+        st.subheader("Worst 10 Vulnerable Loans (Lowest Scores)")
+        # Sort by Score ascending and get the top 10 (which are the worst)
+        worst_10_loans = df_display.sort_values(by='Score', ascending=True).head(10)
+        
+        # Create a Plotly bar chart
+        fig_worst10 = px.bar(
+            worst_10_loans,
+            x='LOAN',
+            y='Score',
+            color='Decision', # Color bars by approval/rejection
+            color_discrete_map={'Approved': '#4CAF50', 'Rejected': '#f44336'}, # Custom colors
+            title='Worst 10 Loans by Credit Score',
+            labels={'LOAN': 'Loan ID', 'Score': 'Credit Score'},
+            hover_data=['REASON', 'JOB', 'DEBTINC'] # Show additional info on hover
+        )
+        fig_worst10.update_layout(xaxis_tickangle=-45) # Angle x-axis labels for readability
+        st.plotly_chart(fig_worst10, use_container_width=True)
+
+    # NEW: Overall Score Distribution Histogram
+    st.subheader("Overall Credit Score Distribution")
+    fig_hist = px.histogram(
+        df_display,
+        x='Score',
+        nbins=20, # Number of bins for the histogram
+        title='Distribution of Credit Scores',
+        labels={'Score': 'Credit Score'},
+        color='Decision', # Color by decision
+        color_discrete_map={'Approved': '#4CAF50', 'Rejected': '#f44336'},
+        marginal='box' # Add a box plot to the margin for more insights
+    )
+    st.plotly_chart(fig_hist, use_container_width=True)
+
 
     st.subheader("Vulnerable Loans (Rejected)")
     vulnerable_loans = df_display[df_display['Decision'] == 'Rejected']
