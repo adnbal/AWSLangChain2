@@ -453,7 +453,12 @@ if st.session_state['analyze_triggered'] and st.session_state['selected_file_for
             st.write(f"DEBUG: Successfully read {len(df)} rows from CSV file.")
             st.write("DEBUG: Columns in loaded CSV file:", df.columns.tolist()) 
 
-            # NEW: Ensure 'ID' column is string type for plotting if it exists
+            # REMOVED: The line that was dropping the 'ID' column
+            # if 'ID' in df.columns:
+            #     df = df.drop(columns=['ID'])
+            #     st.write("DEBUG: Dropped 'ID' column.")
+
+            # Ensure 'ID' column is string type for plotting if it exists
             if 'ID' in df.columns:
                 df['ID'] = df['ID'].astype(str)
                 st.write("DEBUG: 'ID' column processed to string type.")
@@ -476,7 +481,6 @@ if st.session_state['analyze_triggered'] and st.session_state['selected_file_for
 
             # Pass the actual_target_col_name to the scoring function
             results_df = get_credit_score_ml(df.copy(), st.session_state['approval_threshold'], actual_target_col_name) 
-            # Ensure 'ID' is in results_df if it's not already, or handle its merge correctly
             # Since df already has 'ID' and results_df is just Score/Decision, concat will work fine
             df_scored = pd.concat([df, results_df], axis=1)
             st.write(f"DEBUG: Scored data has {len(df_scored)} rows.")
