@@ -1,3 +1,5 @@
 streamlit
 pandas
 numpy
+boto3
+openpyxl
