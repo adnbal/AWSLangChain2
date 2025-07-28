@@ -7,6 +7,12 @@ import datetime # For unique file naming
 import os
 import time # For a small delay
 
+# Import scikit-learn components
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
+
 # --- Initialize session state variables if they don't exist ---
 if 'scored_data' not in st.session_state:
     st.session_state['scored_data'] = pd.DataFrame()
@@ -16,48 +22,89 @@ if 'last_uploaded_s3_key' not in st.session_state:
     st.session_state['last_uploaded_s3_key'] = None
 if 'selected_file_for_analysis' not in st.session_state:
     st.session_state['selected_file_for_analysis'] = None
-# Key for the file uploader to manage its state
-if 'file_uploader_key' not in st.session_state:
-    st.session_state['file_uploader_key'] = 0 # Initialize a unique key for the uploader
 
-# --- Dummy Credit Scoring Model ---
-def get_credit_score(data_row):
-    reason_map = {'DebtCon': 0.3, 'HomeImp': 0.2, 'Other': 0.1}
-    job_map = {'Mgr': 0.2, 'Office': 0.1, 'Other': 0.05, 'ProfExe': 0.15, 'Sales': 0.1, 'Self': 0.25}
+# --- Define Feature Columns (based on your homeequity.xlsx) ---
+NUMERICAL_FEATURES = ['LOAN', 'MORTDUE', 'VALUE', 'YOJ', 'DEROG', 'DELINQ', 'CLAGE', 'NINQ', 'CLNO', 'DEBTINC']
+CATEGORICAL_FEATURES = ['REASON', 'JOB']
+ALL_FEATURES = NUMERICAL_FEATURES + CATEGORICAL_FEATURES
 
-    loan = data_row.get('LOAN', 0)
-    mortdue = data_row.get('MORTDUE', 0)
-    value = data_row.get('VALUE', 0)
-    yojs = data_row.get('YOJ', 0)
-    derog = data_row.get('DEROG', 0)
-    delinq = data_row.get('DELINQ', 0)
-    clage = data_row.get('CLAGE', 0)
-    ninq = data_row.get('NINQ', 0)
-    clno = data_row.get('CLNO', 0)
-    debtinc = data_row.get('DEBTINC', 0)
+# --- Simulate Model Training and Preprocessing ---
+# In a real scenario, this would be done offline and saved/loaded.
+# We create a dummy dataset to fit the preprocessor and model.
+# This dummy data needs to contain examples of all possible categorical values
+# that the real data might have, to ensure the OneHotEncoder is fitted correctly.
+dummy_data_for_training = pd.DataFrame({
+    'LOAN': [10000, 20000, 5000, 15000, 8000],
+    'MORTDUE': [0, 50000, 0, 20000, 10000],
+    'VALUE': [50000, 100000, 30000, 75000, 60000],
+    'REASON': ['DebtCon', 'HomeImp', 'Other', 'DebtCon', 'HomeImp'],
+    'JOB': ['Mgr', 'ProfExe', 'Office', 'Sales', 'Self'],
+    'YOJ': [5, 10, 2, 7, 15],
+    'DEROG': [0, 1, 0, 0, 2],
+    'DELINQ': [0, 0, 1, 0, 0],
+    'CLAGE': [100, 200, 50, 150, 120],
+    'NINQ': [0, 1, 0, 2, 0],
+    'CLNO': [10, 15, 5, 12, 8],
+    'DEBTINC': [35.0, 40.0, 25.0, 30.0, 45.0],
+    'BAD': [0, 1, 0, 1, 0] # Dummy target variable
+})
 
-    reason_score = reason_map.get(data_row.get('REASON', 'Other'), 0.1)
-    job_score = job_map.get(data_row.get('JOB', 'Other'), 0.05)
+# Define preprocessing steps
+preprocessor = ColumnTransformer(
+    transformers=[
+        ('num', StandardScaler(), NUMERICAL_FEATURES),
+        ('cat', OneHotEncoder(handle_unknown='ignore'), CATEGORICAL_FEATURES) # handle_unknown='ignore' is crucial for new categories
+    ])
 
-    score = (
-        (loan / 10000) * 5 +
-        (value / 100000) * 10 -
-        (mortdue / 100000) * 5 +
-        yojs * 0.5 -
-        derog * 20 -
-        delinq * 15 -
-        (clage / 100) * 2 +
-        ninq * 10 -
-        clno * 1 +
-        debtinc * 30 +
-        reason_score * 50 +
-        job_score * 50
-    )
+# Create a pipeline: preprocess then apply logistic regression
+# In a real scenario, the model would be trained on the 'BAD' column
+model_pipeline = Pipeline(steps=[
+    ('preprocessor', preprocessor),
+    ('classifier', LogisticRegression(solver='liblinear', random_state=42, class_weight='balanced')) # class_weight helps with imbalanced data
+])
 
-    score = max(0, min(100, score))
-    decision = "Approved" if score >= 60 else "Rejected"
+# "Fit" the pipeline on the dummy data
+# This simulates loading a pre-trained model and preprocessor
+try:
+    model_pipeline.fit(dummy_data_for_training[ALL_FEATURES], dummy_data_for_training['BAD'])
+    st.sidebar.success("Simulated ML model and preprocessor initialized.")
+except Exception as e:
+    st.sidebar.error(f"Error initializing simulated ML model: {e}")
+    st.stop() # Stop if model can't be initialized
+
+# --- Credit Scoring Function using the ML Model ---
+@st.cache_data # Cache the results of this function for performance
+def get_credit_score_ml(df_input: pd.DataFrame):
+    """
+    Applies the simulated ML model to score a DataFrame of loan applications.
+    """
+    # Ensure input DataFrame has all expected features, fill missing with 0 or 'Other'
+    # This is important for the preprocessor to work correctly
+    for col in NUMERICAL_FEATURES:
+        if col not in df_input.columns:
+            df_input[col] = 0
+    for col in CATEGORICAL_FEATURES:
+        if col not in df_input.columns:
+            df_input[col] = 'Other' # Default for missing categorical
+
+    # Select and reorder columns to match the training order
+    df_processed_for_prediction = df_input[ALL_FEATURES]
+
+    # Predict probabilities (probability of BAD=1, BAD=0)
+    # We want the probability of being a "good" loan (BAD=0) or "bad" loan (BAD=1)
+    # LogisticRegression.predict_proba returns [[prob_class_0, prob_class_1], ...]
+    # We'll use prob_class_0 for "good" score, higher is better.
+    probabilities = model_pipeline.predict_proba(df_processed_for_prediction)
     
-    return pd.Series({'Score': score, 'Decision': decision})
+    # Assuming class 0 is "Good" and class 1 is "Bad"
+    # If your 'BAD' column is 0 for good, 1 for bad, then probabilities[:, 0] is P(Good)
+    scores = probabilities[:, 0] * 100 # Scale to 0-100
+
+    # Make decisions based on a threshold (can be tuned)
+    decisions = np.where(scores >= 50, "Approved", "Rejected") # Using 50 as a default threshold for probability score
+
+    return pd.DataFrame({'Score': scores, 'Decision': decisions})
+
 
 # --- Streamlit UI Configuration ---
 st.set_page_config(page_title="Credit Scoring Dashboard with S3", layout="wide")
@@ -140,7 +187,7 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-st.title("Credit Scoring Dashboard with S3 Integration")
+st.title("Credit Scoring Dashboard with S3 Integration (ML Powered)")
 st.subheader("Upload Excel files and analyze loan vulnerability")
 
 # --- Initialize S3 Client ---
@@ -179,12 +226,10 @@ except Exception as e:
 # --- Callback function to clear the file uploader ---
 def clear_file_uploader():
     st.session_state[f"file_uploader_{st.session_state['file_uploader_key']}"] = None
-    # Increment key to force a re-render and clear the widget
-    st.session_state['file_uploader_key'] += 1
+    st.session_state['file_uploader_key'] += 1 # Increment key to force a re-render and clear the widget
 
 # --- File Upload Section ---
 st.header("Upload Excel File to S3")
-# Use a unique key for the file uploader, incremented after each upload
 uploaded_file = st.file_uploader(
     "Choose an Excel file (.xlsx)",
     type=["xlsx"],
@@ -278,8 +323,9 @@ if st.session_state['analyze_triggered'] and st.session_state['selected_file_for
             st.write(f"DEBUG: Successfully read {len(df)} rows from Excel file.")
             st.write("DEBUG: Columns in loaded Excel file:", df.columns.tolist()) # CRITICAL DEBUGGING POINT
 
-            results = df.apply(get_credit_score, axis=1)
-            df_scored = pd.concat([df, results], axis=1)
+            # --- CHANGED: Call the ML-powered scoring function ---
+            results_df = get_credit_score_ml(df.copy()) # Pass a copy to avoid modifying original df
+            df_scored = pd.concat([df, results_df], axis=1)
             st.write(f"DEBUG: Scored data has {len(df_scored)} rows.")
 
             st.session_state['scored_data'] = df_scored
@@ -334,7 +380,7 @@ st.markdown(
 
     ### ☁️ AWS Cloud Integration:
     * **Data Storage (S3):** Excel files are now stored in AWS S3, providing durable and scalable storage.
-    * **Machine Learning Model Hosting (SageMaker):** In a real scenario, the `get_credit_score` function would call a sophisticated ML model deployed on AWS SageMaker for more accurate and robust predictions. This separates the heavy computation from the Streamlit app.
+    * **Machine Learning Model Hosting (SageMaker):** In a real scenario, the `get_credit_score_ml` function would call a sophisticated ML model deployed on AWS SageMaker for more accurate and robust predictions. This separates the heavy computation from the Streamlit app.
     * **Serverless Functions (Lambda):** Could be used for automated processing of new files uploaded to S3 (e.g., triggering the scoring process automatically).
     * **Authentication & Authorization (Cognito):** For secure user access to the app and S3, ensuring only authorized users can upload or view sensitive loan data.
     * **Logging & Monitoring (CloudWatch):** To track app performance, S3 interactions, and potential errors, providing insights for operational management.
