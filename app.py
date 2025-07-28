@@ -182,8 +182,8 @@ if uploaded_file is not None:
             s3_client.upload_fileobj(uploaded_file, s3_bucket_name, s3_file_key)
         st.success(f"File '{file_name}' uploaded successfully to S3 as '{s3_file_key}'!")
         st.session_state['last_uploaded_s3_key'] = s3_file_key
-        # Rerun to update the selectbox with the new file
-        st.experimental_rerun() 
+        # --- FIX: Changed st.experimental_rerun() to st.rerun() ---
+        st.rerun() 
     except Exception as e:
         st.error(f"Error uploading file to S3: {e}")
 
@@ -223,8 +223,6 @@ else:
 st.markdown("### Loan Analysis")
 
 if selected_s3_file:
-    # This is the Analyze button that triggers the processing
-    # The key ensures Streamlit tracks this specific button's state
     if st.button(f"Analyze '{selected_s3_file}'", key="analyze_button"):
         st.write("DEBUG: Analyze button was clicked. Starting analysis...")
         try:
@@ -248,7 +246,7 @@ if selected_s3_file:
             st.write("DEBUG: An error occurred during analysis:", e)
             st.session_state['scored_data'] = pd.DataFrame()
     else:
-        st.write("DEBUG: Analyze button not yet clicked or state reset.") # Updated debug message
+        st.write("DEBUG: Analyze button not yet clicked or state reset.")
 else:
     st.info("Please select an Excel file from the dropdown to enable analysis.")
 
