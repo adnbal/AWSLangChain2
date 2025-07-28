@@ -4,3 +4,4 @@ numpy
 boto3
 openpyxl
 scikit-learn
+plotly # ADD THIS LINE
