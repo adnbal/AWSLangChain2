@@ -13,15 +13,13 @@ from sklearn.compose import ColumnTransformer
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 
-# --- Initialize session state variables if they don't exist ---
-if 'scored_data' not in st.session_state:
-    st.session_state['scored_data'] = pd.DataFrame()
-if 'analyze_triggered' not in st.session_state:
-    st.session_state['analyze_triggered'] = False
-if 'last_uploaded_s3_key' not in st.session_state:
-    st.session_state['last_uploaded_s3_key'] = None
-if 'selected_file_for_analysis' not in st.session_state:
-    st.session_state['selected_file_for_analysis'] = None
+# --- Initialize session state variables using setdefault for robustness ---
+# This ensures these keys always exist with a default value if not already set.
+st.session_state.setdefault('scored_data', pd.DataFrame())
+st.session_state.setdefault('analyze_triggered', False)
+st.session_state.setdefault('last_uploaded_s3_key', None)
+st.session_state.setdefault('selected_file_for_analysis', None)
+st.session_state.setdefault('file_uploader_key', 0) # Initialize key for file uploader
 
 # --- Define Feature Columns (based on your homeequity.xlsx) ---
 NUMERICAL_FEATURES = ['LOAN', 'MORTDUE', 'VALUE', 'YOJ', 'DEROG', 'DELINQ', 'CLAGE', 'NINQ', 'CLNO', 'DEBTINC']
@@ -225,15 +223,17 @@ except Exception as e:
 
 # --- Callback function to clear the file uploader ---
 def clear_file_uploader():
-    st.session_state[f"file_uploader_{st.session_state['file_uploader_key']}"] = None
-    st.session_state['file_uploader_key'] += 1 # Increment key to force a re-render and clear the widget
+    # Increment the key to force Streamlit to re-render the uploader widget, effectively clearing it
+    st.session_state['file_uploader_key'] += 1
+    # Note: We don't set the widget's value to None directly via session_state here,
+    # as incrementing the key is the recommended way to clear it.
 
 # --- File Upload Section ---
 st.header("Upload Excel File to S3")
 uploaded_file = st.file_uploader(
     "Choose an Excel file (.xlsx)",
     type=["xlsx"],
-    key=f"file_uploader_{st.session_state['file_uploader_key']}"
+    key=f"file_uploader_{st.session_state['file_uploader_key']}" # Dynamic key for clearing
 )
 
 if uploaded_file is not None:
