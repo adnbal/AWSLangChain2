@@ -12,14 +12,14 @@ from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
+from sklearn.impute import SimpleImputer 
 
 # --- Initialize session state variables using setdefault for robustness ---
-# This ensures these keys always exist with a default value if not already set.
 st.session_state.setdefault('scored_data', pd.DataFrame())
 st.session_state.setdefault('analyze_triggered', False)
 st.session_state.setdefault('last_uploaded_s3_key', None)
 st.session_state.setdefault('selected_file_for_analysis', None)
-st.session_state.setdefault('file_uploader_key', 0) # Initialize key for file uploader
+st.session_state.setdefault('file_uploader_key', 0) 
 
 # --- Define Feature Columns (based on your homeequity.xlsx) ---
 NUMERICAL_FEATURES = ['LOAN', 'MORTDUE', 'VALUE', 'YOJ', 'DEROG', 'DELINQ', 'CLAGE', 'NINQ', 'CLNO', 'DEBTINC']
@@ -28,9 +28,6 @@ ALL_FEATURES = NUMERICAL_FEATURES + CATEGORICAL_FEATURES
 
 # --- Simulate Model Training and Preprocessing ---
 # In a real scenario, this would be done offline and saved/loaded.
-# We create a dummy dataset to fit the preprocessor and model.
-# This dummy data needs to contain examples of all possible categorical values
-# that the real data might have, to ensure the OneHotEncoder is fitted correctly.
 dummy_data_for_training = pd.DataFrame({
     'LOAN': [10000, 20000, 5000, 15000, 8000],
     'MORTDUE': [0, 50000, 0, 20000, 10000],
@@ -48,58 +45,91 @@ dummy_data_for_training = pd.DataFrame({
 })
 
 # Define preprocessing steps
+numerical_transformer = Pipeline(steps=[
+    ('imputer', SimpleImputer(strategy='mean')), # Impute missing numerical values with the mean
+    ('scaler', StandardScaler())
+])
+
+categorical_transformer = Pipeline(steps=[
+    ('imputer', SimpleImputer(strategy='constant', fill_value='missing')), # Fill NaNs in categorical
+    ('onehot', OneHotEncoder(handle_unknown='ignore'))
+])
+
 preprocessor = ColumnTransformer(
     transformers=[
-        ('num', StandardScaler(), NUMERICAL_FEATURES),
-        ('cat', OneHotEncoder(handle_unknown='ignore'), CATEGORICAL_FEATURES) # handle_unknown='ignore' is crucial for new categories
+        ('num', numerical_transformer, NUMERICAL_FEATURES),
+        ('cat', categorical_transformer, CATEGORICAL_FEATURES) 
     ])
 
 # Create a pipeline: preprocess then apply logistic regression
-# In a real scenario, the model would be trained on the 'BAD' column
 model_pipeline = Pipeline(steps=[
     ('preprocessor', preprocessor),
-    ('classifier', LogisticRegression(solver='liblinear', random_state=42, class_weight='balanced')) # class_weight helps with imbalanced data
+    ('classifier', LogisticRegression(solver='liblinear', random_state=42, class_weight='balanced'))
 ])
 
 # "Fit" the pipeline on the dummy data
-# This simulates loading a pre-trained model and preprocessor
 try:
     model_pipeline.fit(dummy_data_for_training[ALL_FEATURES], dummy_data_for_training['BAD'])
     st.sidebar.success("Simulated ML model and preprocessor initialized.")
 except Exception as e:
     st.sidebar.error(f"Error initializing simulated ML model: {e}")
-    st.stop() # Stop if model can't be initialized
+    st.stop() 
 
 # --- Credit Scoring Function using the ML Model ---
-@st.cache_data # Cache the results of this function for performance
+@st.cache_data 
 def get_credit_score_ml(df_input: pd.DataFrame):
     """
     Applies the simulated ML model to score a DataFrame of loan applications.
+    Performs robust NaN handling before passing to the ML pipeline.
     """
-    # Ensure input DataFrame has all expected features, fill missing with 0 or 'Other'
-    # This is important for the preprocessor to work correctly
+    # Create a copy to avoid modifying the original DataFrame passed to the cached function
+    df_processed = df_input.copy()
+
+    # --- Robust NaN Handling and Type Coercion BEFORE Pipeline ---
+
+    # 1. Ensure all expected feature columns exist. Add if missing with default values.
     for col in NUMERICAL_FEATURES:
-        if col not in df_input.columns:
-            df_input[col] = 0
+        if col not in df_processed.columns:
+            df_processed[col] = 0.0 # Use float for numerical defaults
     for col in CATEGORICAL_FEATURES:
-        if col not in df_input.columns:
-            df_input[col] = 'Other' # Default for missing categorical
+        if col not in df_processed.columns:
+            df_processed[col] = 'missing_category' # Use a distinct string for missing categories
+
+    # 2. Coerce numerical columns to numeric type, converting any non-numeric values to NaN
+    # This is crucial if Excel data has mixed types or text that should be numbers.
+    for col in NUMERICAL_FEATURES:
+        df_processed[col] = pd.to_numeric(df_processed[col], errors='coerce')
+        # Explicitly fill NaNs in numerical columns after coercion, before pipeline
+        # This catches any NaNs that might result from 'coerce' or original data
+        df_processed[col] = df_processed[col].fillna(df_processed[col].mean() if not df_processed[col].isnull().all() else 0.0)
+        # If the entire column is NaN, fill with 0.0, otherwise fill with its mean.
+
+    # 3. Explicitly fill NaNs in categorical columns
+    for col in CATEGORICAL_FEATURES:
+        # Ensure categorical columns are string type to avoid issues with OneHotEncoder
+        df_processed[col] = df_processed[col].astype(str)
+        df_processed[col] = df_processed[col].fillna('missing_category') # Fill NaNs with a specific string
 
     # Select and reorder columns to match the training order
-    df_processed_for_prediction = df_input[ALL_FEATURES]
+    # At this point, df_processed_for_prediction should contain NO NaNs.
+    df_processed_for_prediction = df_processed[ALL_FEATURES]
+
+    st.write("DEBUG: DataFrame info before ML prediction:")
+    # Use st.text to display df.info() output directly in Streamlit
+    buffer = io.StringIO()
+    df_processed_for_prediction.info(buf=buffer)
+    st.text(buffer.getvalue())
+    st.write("DEBUG: Checking for NaNs after explicit imputation:", df_processed_for_prediction.isnull().sum().sum())
+
 
     # Predict probabilities (probability of BAD=1, BAD=0)
-    # We want the probability of being a "good" loan (BAD=0) or "bad" loan (BAD=1)
-    # LogisticRegression.predict_proba returns [[prob_class_0, prob_class_1], ...]
-    # We'll use prob_class_0 for "good" score, higher is better.
     probabilities = model_pipeline.predict_proba(df_processed_for_prediction)
     
     # Assuming class 0 is "Good" and class 1 is "Bad"
-    # If your 'BAD' column is 0 for good, 1 for bad, then probabilities[:, 0] is P(Good)
-    scores = probabilities[:, 0] * 100 # Scale to 0-100
+    scores = probabilities[:, 0] * 100 
 
     # Make decisions based on a threshold (can be tuned)
-    decisions = np.where(scores >= 50, "Approved", "Rejected") # Using 50 as a default threshold for probability score
+    decisions = np.where(scores >= 50, "Approved", "Rejected") 
 
     return pd.DataFrame({'Score': scores, 'Decision': decisions})
 
@@ -223,17 +253,14 @@ except Exception as e:
 
 # --- Callback function to clear the file uploader ---
 def clear_file_uploader():
-    # Increment the key to force Streamlit to re-render the uploader widget, effectively clearing it
     st.session_state['file_uploader_key'] += 1
-    # Note: We don't set the widget's value to None directly via session_state here,
-    # as incrementing the key is the recommended way to clear it.
 
 # --- File Upload Section ---
 st.header("Upload Excel File to S3")
 uploaded_file = st.file_uploader(
     "Choose an Excel file (.xlsx)",
     type=["xlsx"],
-    key=f"file_uploader_{st.session_state['file_uploader_key']}" # Dynamic key for clearing
+    key=f"file_uploader_{st.session_state['file_uploader_key']}" 
 )
 
 if uploaded_file is not None:
@@ -246,14 +273,13 @@ if uploaded_file is not None:
             s3_client.upload_fileobj(uploaded_file, s3_bucket_name, s3_file_key)
         st.success(f"File '{file_name}' uploaded successfully to S3 as '{s3_file_key}'!")
         st.session_state['last_uploaded_s3_key'] = s3_file_key
-        st.session_state['analyze_triggered'] = False # Reset trigger after upload
-        st.session_state['scored_data'] = pd.DataFrame() # Clear old data
+        st.session_state['analyze_triggered'] = False 
+        st.session_state['scored_data'] = pd.DataFrame() 
         st.info("File uploaded. Please select it from the dropdown below and click 'Analyze'.")
-        time.sleep(1) # Small delay for message visibility
+        time.sleep(1) 
 
-        # --- CRITICAL FIX: Clear the uploader state and rerun ---
-        clear_file_uploader() # Clear the widget's internal state
-        st.rerun() # Force a rerun to reflect the cleared uploader and updated file list
+        clear_file_uploader() 
+        st.rerun() 
 
     except Exception as e:
         st.error(f"Error uploading file to S3: {e}")
@@ -289,7 +315,7 @@ with st.form("analysis_trigger_form"):
             "Choose an Excel file from S3:",
             options=s3_files,
             index=default_index,
-            key="s3_file_selector_form" # Unique key for selectbox within form
+            key="s3_file_selector_form" 
         )
     else:
         st.info("No Excel files found in the 'uploads/' folder of your S3 bucket. Please upload one above.")
@@ -300,9 +326,9 @@ with st.form("analysis_trigger_form"):
     if analyze_submitted:
         if selected_s3_file_in_form:
             st.write(f"DEBUG: Analyze form submitted. Selected file: `{selected_s3_file_in_form}`. Starting analysis...")
-            st.session_state['selected_file_for_analysis'] = selected_s3_file_in_form # Store the selected file
-            st.session_state['analyze_triggered'] = True # Set the trigger
-            st.rerun() # Rerun to process the analysis trigger
+            st.session_state['selected_file_for_analysis'] = selected_s3_file_in_form 
+            st.session_state['analyze_triggered'] = True 
+            st.rerun() 
         else:
             st.warning("Please select a file to analyze.")
             st.session_state['analyze_triggered'] = False
@@ -310,7 +336,6 @@ with st.form("analysis_trigger_form"):
         st.write("DEBUG: Analysis form not yet submitted.")
 
 # --- Perform Analysis if Triggered ---
-# This block runs on a subsequent rerun after the form is submitted
 if st.session_state['analyze_triggered'] and st.session_state['selected_file_for_analysis']:
     file_to_analyze = st.session_state['selected_file_for_analysis']
     st.write(f"DEBUG: Analysis triggered via session state for file: `{file_to_analyze}`.")
@@ -321,25 +346,24 @@ if st.session_state['analyze_triggered'] and st.session_state['selected_file_for
 
             df = pd.read_excel(io.BytesIO(excel_data))
             st.write(f"DEBUG: Successfully read {len(df)} rows from Excel file.")
-            st.write("DEBUG: Columns in loaded Excel file:", df.columns.tolist()) # CRITICAL DEBUGGING POINT
+            st.write("DEBUG: Columns in loaded Excel file:", df.columns.tolist()) 
 
-            # --- CHANGED: Call the ML-powered scoring function ---
-            results_df = get_credit_score_ml(df.copy()) # Pass a copy to avoid modifying original df
+            results_df = get_credit_score_ml(df.copy()) 
             df_scored = pd.concat([df, results_df], axis=1)
             st.write(f"DEBUG: Scored data has {len(df_scored)} rows.")
 
             st.session_state['scored_data'] = df_scored
             st.success(f"Analysis complete for '{file_to_analyze}'.")
-            st.session_state['analyze_triggered'] = False # Reset trigger after analysis
-            st.session_state['selected_file_for_analysis'] = None # Clear selected file after analysis
+            st.session_state['analyze_triggered'] = False 
+            st.session_state['selected_file_for_analysis'] = None 
             st.write("DEBUG: Analysis complete. Trigger and selected file reset.")
 
     except Exception as e:
         st.error(f"Error analyzing file from S3: {e}. Please check file format and column names in your Excel file.")
         st.write("DEBUG: An error occurred during analysis:", e)
         st.session_state['scored_data'] = pd.DataFrame()
-        st.session_state['analyze_triggered'] = False # Reset trigger on error
-        st.session_state['selected_file_for_analysis'] = None # Clear selected file on error
+        st.session_state['analyze_triggered'] = False 
+        st.session_state['selected_file_for_analysis'] = None 
 
 # --- Clear Data Button ---
 if st.session_state['scored_data'] is not None and not st.session_state['scored_data'].empty:
@@ -348,7 +372,7 @@ if st.session_state['scored_data'] is not None and not st.session_state['scored_
         st.session_state['analyze_triggered'] = False
         st.session_state['selected_file_for_analysis'] = None
         st.success("Displayed data cleared.")
-        st.rerun() # Rerun to clear the display immediately
+        st.rerun() 
 
 # --- Display Dashboard Results ---
 st.markdown("### Dashboard Display")
@@ -386,9 +410,4 @@ st.markdown(
     * **Logging & Monitoring (CloudWatch):** To track app performance, S3 interactions, and potential errors, providing insights for operational management.
 
     ### 🔗 Langchain Integration:
-    Langchain is primarily used for building applications with Large Language Models (LLMs). It could enhance this application in several ways:
-    * **Explainable AI (XAI):** After identifying vulnerable loans, Langchain could prompt an LLM to generate more detailed, human-readable explanations for *why* specific loans were flagged as vulnerable, based on their input features.
-    * **Conversational Interface:** Users could interact with the dashboard using natural language queries (e.g., "Show me all rejected loans with a debt-to-income ratio above 40%"), with Langchain interpreting the query and dynamically filtering the DataFrame.
-    * **Automated Reporting:** Langchain could help generate summary reports or alerts for vulnerable loans, potentially integrating with email services to notify relevant stakeholders.
-    """
-)
+    Langchain is primarily used for building applications with Large Language Models (LLMs). 
