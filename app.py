@@ -148,18 +148,21 @@ st.subheader("Upload Excel files and analyze loan vulnerability")
 # --- Initialize S3 Client ---
 s3_client = None
 s3_bucket_name = None
+aws_region_name = None # Declare it here
 
 try:
     # Accessing nested secrets from the 'aws' section
     aws_access_key = st.secrets["aws"]["access_key_id"]
     aws_secret_key = st.secrets["aws"]["secret_access_key"]
     s3_bucket_name = st.secrets["aws"]["s3_bucket_name"]
+    aws_region_name = st.secrets["aws"]["region_name"] # Retrieve region from secrets
 
     # Initialize the boto3 S3 client
     s3_client = boto3.client(
         's3',
         aws_access_key_id=aws_access_key,
-        aws_secret_access_key=aws_secret_key
+        aws_secret_access_key=aws_secret_key,
+        region_name=aws_region_name # Use the retrieved region here
     )
     st.sidebar.success("AWS S3 client initialized!")
 
@@ -168,6 +171,7 @@ try:
     st.sidebar.write(f"AWS Access Key ID: `{aws_access_key[:4]}...`")
     st.sidebar.write(f"AWS Secret Access Key: `{aws_secret_key[:4]}...`")
     st.sidebar.write(f"S3 Bucket Name: `{s3_bucket_name}`")
+    st.sidebar.write(f"AWS Region: `{aws_region_name}`")
 
 except KeyError as e:
     # If any required secret is missing, display an error and stop the app
@@ -218,45 +222,64 @@ if s3_files:
     # Determine default selection: last uploaded file or the first in the list
     default_index = 0
     if 'last_uploaded_s3_key' in st.session_state and st.session_state['last_uploaded_s3_key'] in s3_files:
-        default_index = s3_files.index(st.session_state['last_uploaded_s3_key'])
+        try:
+            default_index = s3_files.index(st.session_state['last_uploaded_s3_key'])
+        except ValueError:
+            # If the last uploaded key is no longer in the list (e.g., deleted from S3), default to 0
+            default_index = 0
 
     selected_s3_file = st.selectbox(
         "Select an Excel file from S3 to analyze:",
         options=s3_files,
-        index=default_index
+        index=default_index,
+        key="s3_file_selector" # Added a key for stability if multiple selectboxes exist
     )
 else:
     st.info("No Excel files found in the 'uploads/' folder of your S3 bucket. Please upload one above.")
 
+# --- DEBUGGING: Confirm button rendering ---
+st.write("---") # Visual separator
+st.markdown("### Debugging: Analyze Button Section")
 
-if selected_s3_file and st.button(f"Analyze '{selected_s3_file}'"):
-    try:
-        with st.spinner(f"Downloading and analyzing '{selected_s3_file}' from S3..."):
-            # Download file content from S3
-            obj = s3_client.get_object(Bucket=s3_bucket_name, Key=selected_s3_file)
-            excel_data = obj['Body'].read()
+if selected_s3_file:
+    st.write(f"Selected file for analysis: `{selected_s3_file}`")
+    # This is the Analyze button that triggers the processing
+    if st.button(f"Analyze '{selected_s3_file}'", key="analyze_button"): # Added a key for stability
+        st.write("DEBUG: Analyze button was clicked. Starting analysis...")
+        try:
+            with st.spinner(f"Downloading and analyzing '{selected_s3_file}' from S3..."):
+                # Download file content from S3
+                obj = s3_client.get_object(Bucket=s3_bucket_name, Key=selected_s3_file)
+                excel_data = obj['Body'].read()
 
-            # Read Excel data into a pandas DataFrame using io.BytesIO
-            df = pd.read_excel(io.BytesIO(excel_data))
+                # Read Excel data into a pandas DataFrame using io.BytesIO
+                df = pd.read_excel(io.BytesIO(excel_data))
+                st.write(f"DEBUG: Successfully read {len(df)} rows from Excel file.")
+                st.write("DEBUG: Columns in loaded Excel file:", df.columns.tolist())
 
-            # Apply credit scoring to each row of the DataFrame
-            results = df.apply(get_credit_score, axis=1)
-            # Concatenate the original DataFrame with the new 'Score' and 'Decision' columns
-            df_scored = pd.concat([df, results], axis=1)
+                # Apply credit scoring to each row of the DataFrame
+                results = df.apply(get_credit_score, axis=1)
+                # Concatenate the original DataFrame with the new 'Score' and 'Decision' columns
+                df_scored = pd.concat([df, results], axis=1)
+                st.write(f"DEBUG: Scored data has {len(df_scored)} rows.")
 
-            # Store the scored data in Streamlit's session state for persistence across reruns
-            st.session_state['scored_data'] = df_scored
+                # Store the scored data in Streamlit's session state for persistence across reruns
+                st.session_state['scored_data'] = df_scored
 
-            st.success(f"Analysis complete for '{selected_s3_file}'.")
+                st.success(f"Analysis complete for '{selected_s3_file}'.")
 
-    except Exception as e:
-        st.error(f"Error analyzing file from S3: {e}. Please check file format and column names.")
-        st.session_state['scored_data'] = pd.DataFrame() # Clear data on error
+        except Exception as e:
+            st.error(f"Error analyzing file from S3: {e}. Please check file format and column names.")
+            st.write("DEBUG: An error occurred during analysis:", e)
+            st.session_state['scored_data'] = pd.DataFrame() # Clear data on error
+else:
+    st.info("Please select a file from the dropdown to enable the Analyze button.")
 
 # --- Display Dashboard Results ---
-# Only display if there's scored data in session state
+st.markdown("### Debugging: Dashboard Display Section")
 if 'scored_data' in st.session_state and not st.session_state['scored_data'].empty:
     df_display = st.session_state['scored_data']
+    st.write("DEBUG: Displaying scored data.")
 
     st.subheader("Full Loan Data with Scores and Decisions")
     st.dataframe(df_display) # Display the full DataFrame
@@ -270,6 +293,8 @@ if 'scored_data' in st.session_state and not st.session_state['scored_data'].emp
         st.info(f"Found {len(vulnerable_loans)} vulnerable loans.")
     else:
         st.success("No vulnerable loans found in this dataset!")
+else:
+    st.write("DEBUG: No scored data found in session state or data is empty. Dashboard not displayed.")
 
 # --- AWS and Langchain Integration Explanation (Recap) ---
 st.markdown("---")
