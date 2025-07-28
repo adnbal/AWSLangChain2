@@ -5,6 +5,7 @@ import boto3
 import io
 import datetime # For unique file naming
 import os
+import time # For a small delay
 
 # --- Dummy Credit Scoring Model ---
 def get_credit_score(data_row):
@@ -135,17 +136,13 @@ s3_bucket_name = None
 aws_region_name = None
 
 try:
+    # --- CORRECTED: Accessing secrets as nested keys, matching your Streamlit Cloud config ---
     aws_access_key = st.secrets["aws"]["access_key_id"]
     aws_secret_key = st.secrets["aws"]["secret_access_key"]
     s3_bucket_name = st.secrets["aws"]["s3_bucket_name"]
-    
-    # Robustly get region_name: try nested first, then top-level
-    try:
-        aws_region_name = st.secrets["aws"]["region_name"]
-    except KeyError:
-        # If 'aws.region_name' is not found, try 'region_name' as a top-level secret
-        aws_region_name = st.secrets["region_name"] 
-
+    aws_region_name = st.secrets["aws"]["region_name"]
+    # If you have other top-level secrets, you'd access them like:
+    # openai_api_key = st.secrets.get("OPENAI_API_KEY", "NOT_SET") 
 
     s3_client = boto3.client(
         's3',
@@ -160,9 +157,11 @@ try:
     st.sidebar.write(f"AWS Secret Access Key: `{aws_secret_key[:4]}...`")
     st.sidebar.write(f"S3 Bucket Name: `{s3_bucket_name}`")
     st.sidebar.write(f"AWS Region: `{aws_region_name}`")
+    # if openai_api_key != "NOT_SET":
+    #    st.sidebar.write(f"OpenAI API Key: `{openai_api_key[:4]}...`")
 
 except KeyError as e:
-    st.sidebar.error(f"Secret key not found: {e}. Please ensure your secrets are configured correctly in Streamlit Cloud or `.streamlit/secrets.toml`.")
+    st.sidebar.error(f"Secret key not found: {e}. Please ensure your secrets are configured correctly as nested keys under `[aws]` in Streamlit Cloud or `.streamlit/secrets.toml`.")
     st.stop()
 except Exception as e:
     st.sidebar.error(f"An error occurred while initializing S3 client: {e}")
@@ -182,8 +181,8 @@ if uploaded_file is not None:
             s3_client.upload_fileobj(uploaded_file, s3_bucket_name, s3_file_key)
         st.success(f"File '{file_name}' uploaded successfully to S3 as '{s3_file_key}'!")
         st.session_state['last_uploaded_s3_key'] = s3_file_key
-        # --- FIX: Changed st.experimental_rerun() to st.rerun() ---
-        st.rerun() 
+        st.info("File uploaded. Please select it from the dropdown below and click 'Analyze'.")
+        time.sleep(1) 
     except Exception as e:
         st.error(f"Error uploading file to S3: {e}")
 
@@ -232,7 +231,7 @@ if selected_s3_file:
 
                 df = pd.read_excel(io.BytesIO(excel_data))
                 st.write(f"DEBUG: Successfully read {len(df)} rows from Excel file.")
-                st.write("DEBUG: Columns in loaded Excel file:", df.columns.tolist())
+                st.write("DEBUG: Columns in loaded Excel file:", df.columns.tolist()) # CRITICAL DEBUGGING POINT
 
                 results = df.apply(get_credit_score, axis=1)
                 df_scored = pd.concat([df, results], axis=1)
