@@ -141,11 +141,18 @@ st.subheader("Enter applicant details to get a credit score")
 # --- Accessing Secrets ---
 st.sidebar.header("Application Secrets (for demonstration)")
 try:
-    aws_access_key = st.secrets["aws_access_key_id"]
-    aws_secret_key = st.secrets["aws_secret_access_key"]
-    openai_key = st.secrets["openai_api_key"]
-    db_url = st.secrets["database_url"]
-    section_key = st.secrets["some_section"]["key_in_section"]
+    # CORRECTED ACCESS FOR NESTED AWS KEYS
+    aws_access_key = st.secrets["aws"]["access_key_id"]
+    # Assuming aws_secret_access_key is also under the [aws] section
+    aws_secret_key = st.secrets["aws"]["secret_access_key"]
+    
+    # Example for a top-level secret (if you had one)
+    openai_key = st.secrets.get("openai_api_key", "NOT_SET") # Use .get() for optional secrets
+    db_url = st.secrets.get("database_url", "NOT_SET")
+    
+    # Example for another nested section
+    section_key = st.secrets.get("some_section", {}).get("key_in_section", "NOT_SET")
+
 
     st.sidebar.write(f"AWS Access Key ID: `{aws_access_key[:4]}...`") # Show only first few chars
     st.sidebar.write(f"AWS Secret Access Key: `{aws_secret_key[:4]}...`")
