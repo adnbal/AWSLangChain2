@@ -16,6 +16,9 @@ if 'last_uploaded_s3_key' not in st.session_state:
     st.session_state['last_uploaded_s3_key'] = None
 if 'selected_file_for_analysis' not in st.session_state:
     st.session_state['selected_file_for_analysis'] = None
+# Key for the file uploader to manage its state
+if 'file_uploader_key' not in st.session_state:
+    st.session_state['file_uploader_key'] = 0 # Initialize a unique key for the uploader
 
 # --- Dummy Credit Scoring Model ---
 def get_credit_score(data_row):
@@ -173,9 +176,20 @@ except Exception as e:
     st.sidebar.error(f"An error occurred while initializing S3 client: {e}")
     st.stop()
 
+# --- Callback function to clear the file uploader ---
+def clear_file_uploader():
+    st.session_state[f"file_uploader_{st.session_state['file_uploader_key']}"] = None
+    # Increment key to force a re-render and clear the widget
+    st.session_state['file_uploader_key'] += 1
+
 # --- File Upload Section ---
 st.header("Upload Excel File to S3")
-uploaded_file = st.file_uploader("Choose an Excel file (.xlsx)", type=["xlsx"])
+# Use a unique key for the file uploader, incremented after each upload
+uploaded_file = st.file_uploader(
+    "Choose an Excel file (.xlsx)",
+    type=["xlsx"],
+    key=f"file_uploader_{st.session_state['file_uploader_key']}"
+)
 
 if uploaded_file is not None:
     file_name = uploaded_file.name
@@ -190,8 +204,12 @@ if uploaded_file is not None:
         st.session_state['analyze_triggered'] = False # Reset trigger after upload
         st.session_state['scored_data'] = pd.DataFrame() # Clear old data
         st.info("File uploaded. Please select it from the dropdown below and click 'Analyze'.")
-        time.sleep(1) 
-        st.rerun() # Rerun to update the selectbox with the new file
+        time.sleep(1) # Small delay for message visibility
+
+        # --- CRITICAL FIX: Clear the uploader state and rerun ---
+        clear_file_uploader() # Clear the widget's internal state
+        st.rerun() # Force a rerun to reflect the cleared uploader and updated file list
+
     except Exception as e:
         st.error(f"Error uploading file to S3: {e}")
 
