@@ -10,7 +10,6 @@ import time # For a small delay
 # Import scikit-learn components
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
-# CHANGED: Importing MLPClassifier for Neural Network
 from sklearn.neural_network import MLPClassifier 
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer 
@@ -46,10 +45,10 @@ DUMMY_TARGET_COLUMN_NAME = TARGET_COLUMN
 # This dummy data is significantly expanded and designed to force the model
 # to learn patterns for both defaulting (1) and non-defaulting (0) cases.
 # It includes more varied values and clearer distinctions.
-# CHANGED: Replaced .append() with pd.concat()
+# Added 'ID' column to dummy data for consistency with actual data structure
 dummy_data_for_training = pd.concat([
     pd.DataFrame({
-        # Good applicants (Default = 0) - low derogatory, high credit age, low inquiries
+        'ID': [f'Good_ID_{i}' for i in range(20)], # Add dummy IDs
         'DerogCnt': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         'CollectCnt': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         'BanruptcyInd': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -77,9 +76,10 @@ dummy_data_for_training = pd.concat([
         'TLOpenPct': [0.8, 0.75, 0.82, 0.78, 0.85, 0.79, 0.81, 0.77, 0.83, 0.76, 0.8, 0.75, 0.82, 0.78, 0.85, 0.79, 0.81, 0.77, 0.83, 0.76],
         'TLBadDerogCnt': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         'TLOpen24Pct': [0.9, 0.88, 0.92, 0.89, 0.95, 0.91, 0.93, 0.87, 0.94, 0.90, 0.9, 0.88, 0.92, 0.89, 0.95, 0.91, 0.93, 0.87, 0.94, 0.90],
-        DUMMY_TARGET_COLUMN_NAME: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        DUMMY_TARGET_COLUMN_NAME: [0] * 20
     }),
     pd.DataFrame({ # Bad applicants (Default = 1) - high derogatory, low credit age, high inquiries
+        'ID': [f'Bad_ID_{i}' for i in range(10)], # Add dummy IDs
         'DerogCnt': [1, 2, 3, 1, 2, 3, 1, 2, 3, 1],
         'CollectCnt': [1, 1, 2, 1, 1, 2, 1, 1, 2, 1],
         'BanruptcyInd': [0, 1, 0, 1, 0, 1, 0, 1, 0, 1],
@@ -107,7 +107,7 @@ dummy_data_for_training = pd.concat([
         'TLOpenPct': [0.2, 0.15, 0.25, 0.1, 0.22, 0.18, 0.28, 0.12, 0.21, 0.17],
         'TLBadDerogCnt': [1, 2, 1, 2, 1, 2, 1, 2, 1, 2],
         'TLOpen24Pct': [0.3, 0.25, 0.35, 0.2, 0.32, 0.28, 0.38, 0.22, 0.31, 0.27],
-        DUMMY_TARGET_COLUMN_NAME: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+        DUMMY_TARGET_COLUMN_NAME: [1] * 10
     })
 ], ignore_index=True)
 
@@ -132,21 +132,21 @@ preprocessor = ColumnTransformer(
 # Create a pipeline: preprocess then apply MLPClassifier (Neural Network)
 model_pipeline = Pipeline(steps=[
     ('preprocessor', preprocessor),
-    # CHANGED: Using MLPClassifier (Neural Network)
     ('classifier', MLPClassifier(hidden_layer_sizes=(100, 50), max_iter=500, random_state=42, early_stopping=True, n_iter_no_change=50)) 
 ])
 
 # "Fit" the pipeline on the dummy data
 try:
-    dummy_features = NUMERICAL_FEATURES + CATEGORICAL_FEATURES
+    # Ensure dummy_features exist in dummy_data_for_training before fitting
+    # Exclude 'ID' from features used for training the model
+    dummy_features_for_training = [col for col in NUMERICAL_FEATURES + CATEGORICAL_FEATURES if col != 'ID']
     
-    # Ensure all dummy_features exist in dummy_data_for_training before fitting
-    missing_dummy_features = [col for col in dummy_features if col not in dummy_data_for_training.columns]
+    missing_dummy_features = [col for col in dummy_features_for_training if col not in dummy_data_for_training.columns]
     if missing_dummy_features:
         st.sidebar.error(f"Missing dummy features for model training: {missing_dummy_features}. Please check dummy_data_for_training.")
         st.stop()
 
-    model_pipeline.fit(dummy_data_for_training[dummy_features], dummy_data_for_training[DUMMY_TARGET_COLUMN_NAME])
+    model_pipeline.fit(dummy_data_for_training[dummy_features_for_training], dummy_data_for_training[DUMMY_TARGET_COLUMN_NAME])
     st.sidebar.success("Simulated ML model (Neural Network) and preprocessor initialized for new data.")
 except Exception as e:
     st.sidebar.error(f"Error initializing simulated ML model: {e}")
@@ -161,8 +161,8 @@ def get_credit_score_ml(df_input: pd.DataFrame, approval_threshold: int, actual_
     """
     df_processed = df_input.copy()
 
-    # Define features to be used for prediction (excluding the actual target column)
-    features_for_prediction = [col for col in NUMERICAL_FEATURES + CATEGORICAL_FEATURES if col != actual_target_column]
+    # Define features to be used for prediction (excluding the actual target column and 'ID')
+    features_for_prediction = [col for col in NUMERICAL_FEATURES + CATEGORICAL_FEATURES if col != actual_target_column and col != 'ID']
 
     # Ensure all expected feature columns exist. Add if missing with default values.
     for col in features_for_prediction:
@@ -209,7 +209,6 @@ def get_credit_score_ml(df_input: pd.DataFrame, approval_threshold: int, actual_
 st.set_page_config(page_title="Credit Scoring Dashboard with S3", layout="wide")
 
 # Custom CSS for styling the Streamlit app
-# CHANGED: Re-formatted the triple-quoted string for robustness
 st.markdown(
     """
     <style>
@@ -286,7 +285,7 @@ st.markdown(
     """
 )
 
-st.title("Credit Risk Dashboard (Powered by Neural Network with Adjustable Threshold!)") # Updated Title
+st.title("Credit Risk Dashboard (Powered by Neural Network with Adjustable Threshold!)") 
 st.subheader("Upload Credit Data and Analyze Risk") 
 
 # --- Initialize S3 Client ---
@@ -454,10 +453,15 @@ if st.session_state['analyze_triggered'] and st.session_state['selected_file_for
             st.write(f"DEBUG: Successfully read {len(df)} rows from CSV file.")
             st.write("DEBUG: Columns in loaded CSV file:", df.columns.tolist()) 
 
-            # Drop 'ID' column if it exists, as it's not a feature
+            # NEW: Ensure 'ID' column is string type for plotting if it exists
             if 'ID' in df.columns:
-                df = df.drop(columns=['ID'])
-                st.write("DEBUG: Dropped 'ID' column.")
+                df['ID'] = df['ID'].astype(str)
+                st.write("DEBUG: 'ID' column processed to string type.")
+            # If 'ID' column is not present, create a unique identifier from index for plotting
+            else:
+                df['ID'] = df.index.astype(str) + '_idx'
+                st.write("DEBUG: 'ID' column not found, created unique IDs from index.")
+
 
             # Ensure the selected target column is present and is integer type for classification
             if actual_target_col_name in df.columns:
@@ -472,6 +476,8 @@ if st.session_state['analyze_triggered'] and st.session_state['selected_file_for
 
             # Pass the actual_target_col_name to the scoring function
             results_df = get_credit_score_ml(df.copy(), st.session_state['approval_threshold'], actual_target_col_name) 
+            # Ensure 'ID' is in results_df if it's not already, or handle its merge correctly
+            # Since df already has 'ID' and results_df is just Score/Decision, concat will work fine
             df_scored = pd.concat([df, results_df], axis=1)
             st.write(f"DEBUG: Scored data has {len(df_scored)} rows.")
 
@@ -529,18 +535,26 @@ if 'scored_data' in st.session_state and not st.session_state['scored_data'].emp
 
     with col1:
         st.subheader("Top 10 Approved Applicants (Highest Scores)") 
+        # Sort by Score descending and get the top 10
         top_10_approved_loans = df_display[df_display['Decision'] == 'Approved'].sort_values(by='Score', ascending=False).head(10)
         
         if not top_10_approved_loans.empty:
+            # Get ordered IDs for Plotly category_orders
+            ordered_top_ids = top_10_approved_loans['ID'].tolist()
+
             fig_top10 = px.bar(
                 top_10_approved_loans,
-                x=top_10_approved_loans.index, # Use DataFrame index as x-axis for unique ID representation
+                x='ID', # Use 'ID' for x-axis
                 y='Score',
                 color_discrete_sequence=['#4CAF50'], 
                 title='Top 10 Approved Applicants by Score', 
-                labels={top_10_approved_loans.index.name: 'Applicant ID', 'Score': 'Credit Score'}, 
-                hover_data=NUMERICAL_FEATURES + CATEGORICAL_FEATURES + ['Decision'] 
+                labels={'ID': 'Applicant ID', 'Score': 'Credit Score'}, 
+                hover_data=NUMERICAL_FEATURES + CATEGORICAL_FEATURES + ['Decision'],
+                text='Score' # Show score on bars
             )
+            # Ensure bars are in descending order of score
+            fig_top10.update_xaxes(categoryorder='array', categoryarray=ordered_top_ids)
+            fig_top10.update_traces(texttemplate='%{text:.2s}', textposition='outside') # Format text on bars
             fig_top10.update_layout(xaxis_tickangle=-45) 
             st.plotly_chart(fig_top10, use_container_width=True)
         else:
@@ -549,18 +563,26 @@ if 'scored_data' in st.session_state and not st.session_state['scored_data'].emp
 
     with col2:
         st.subheader("Worst 10 Rejected Applicants (Lowest Scores)") 
+        # Sort by Score ascending and get the top 10 (which are the worst)
         worst_10_rejected_loans = df_display[df_display['Decision'] == 'Rejected'].sort_values(by='Score', ascending=True).head(10)
         
         if not worst_10_rejected_loans.empty:
+            # Get ordered IDs for Plotly category_orders
+            ordered_worst_ids = worst_10_rejected_loans['ID'].tolist()
+
             fig_worst10 = px.bar(
                 worst_10_rejected_loans,
-                x=worst_10_rejected_loans.index, # Use DataFrame index as x-axis for unique ID representation
+                x='ID', # Use 'ID' for x-axis
                 y='Score',
                 color_discrete_sequence=['#f44336'], 
                 title='Worst 10 Rejected Applicants by Score', 
-                labels={worst_10_rejected_loans.index.name: 'Applicant ID', 'Score': 'Credit Score'}, 
-                hover_data=NUMERICAL_FEATURES + CATEGORICAL_FEATURES + ['Decision']
+                labels={'ID': 'Applicant ID', 'Score': 'Credit Score'}, 
+                hover_data=NUMERICAL_FEATURES + CATEGORICAL_FEATURES + ['Decision'],
+                text='Score' # Show score on bars
             )
+            # Ensure bars are in ascending order of score
+            fig_worst10.update_xaxes(categoryorder='array', categoryarray=ordered_worst_ids)
+            fig_worst10.update_traces(texttemplate='%{text:.2s}', textposition='outside') # Format text on bars
             fig_worst10.update_layout(xaxis_tickangle=-45) 
             st.plotly_chart(fig_worst10, use_container_width=True)
         else:
@@ -599,7 +621,7 @@ st.subheader("How this app would integrate with AWS and Langchain (Recap):")
 
 st.markdown(
     """
-    This Streamlit app now demonstrates uploading and analyzing **sophisticated credit data** from AWS S3, leveraging a powerful Gradient Boosting Machine learning model.
+    This Streamlit app now demonstrates uploading and analyzing **sophisticated credit data** from AWS S3, leveraging a powerful Neural Network machine learning model.
 
     ### ☁️ AWS Cloud Integration:
     * **Data Storage (S3):** Data files are stored in AWS S3, providing durable and scalable storage.
