@@ -27,16 +27,15 @@ st.session_state.setdefault('file_uploader_key', 0)
 st.session_state.setdefault('approval_threshold', 50) # Default approval threshold
 
 # --- Define Feature Columns for the NEW 'credit.csv' dataset ---
-# Based on the header: TARGET,ID,DerogCnt,CollectCnt,BanruptcyInd,InqCnt06,InqTimeLast,InqFinanceCnt24,TLTimeFirst,TLTimeLast,TLCnt03,TLCnt12,TLCnt24,TLCnt,TLSum,TLMaxSum,TLSatCnt,TLDel60Cnt,TLBadCnt24,TL75UtilCnt,TL50UtilCnt,TLBalHCPct,TLSatPct,TLDel3060Cnt24,TLDel90Cnt24,TLDel60CntAll,TLOpenPct,TLBadDerogCnt,TLDel60Cnt24,TLOpen24Pct
-# Note: TLDel60Cnt24 appears twice in the provided header, assuming one is a typo or redundant.
+# CHANGED: BanruptcyInd moved to NUMERICAL_FEATURES
 NUMERICAL_FEATURES = [
-    'DerogCnt', 'CollectCnt', 'InqCnt06', 'InqTimeLast', 'InqFinanceCnt24',
+    'DerogCnt', 'CollectCnt', 'BanruptcyInd', 'InqCnt06', 'InqTimeLast', 'InqFinanceCnt24',
     'TLTimeFirst', 'TLTimeLast', 'TLCnt03', 'TLCnt12', 'TLCnt24', 'TLCnt',
     'TLSum', 'TLMaxSum', 'TLSatCnt', 'TLDel60Cnt', 'TLBadCnt24',
     'TL75UtilCnt', 'TL50UtilCnt', 'TLBalHCPct', 'TLSatPct', 'TLDel3060Cnt24',
     'TLDel90Cnt24', 'TLDel60CntAll', 'TLOpenPct', 'TLBadDerogCnt', 'TLOpen24Pct'
 ]
-CATEGORICAL_FEATURES = ['BanruptcyInd'] # Assuming this is a binary indicator that might be treated as categorical if not strictly 0/1 numeric
+CATEGORICAL_FEATURES = [] # No explicit categorical features based on the provided header and common usage
 TARGET_COLUMN = 'TARGET' # The column to predict
 
 ALL_FEATURES = NUMERICAL_FEATURES + CATEGORICAL_FEATURES
@@ -46,7 +45,7 @@ ALL_FEATURES = NUMERICAL_FEATURES + CATEGORICAL_FEATURES
 dummy_data_for_training = pd.DataFrame({
     'DerogCnt': [1, 0, 2, 0, 1, 0],
     'CollectCnt': [0, 1, 0, 0, 0, 1],
-    'BanruptcyInd': [0, 1, 0, 0, 0, 1], # Assuming 0 or 1
+    'BanruptcyInd': [0, 1, 0, 0, 0, 1], # Now correctly treated as numerical
     'InqCnt06': [3, 1, 5, 2, 0, 4],
     'InqTimeLast': [10, 5, 15, 8, 20, 12],
     'InqFinanceCnt24': [2, 1, 3, 1, 0, 2],
@@ -80,6 +79,9 @@ numerical_transformer = Pipeline(steps=[
     ('scaler', StandardScaler())
 ])
 
+# If there are no categorical features, this transformer is not strictly needed in ColumnTransformer,
+# but keeping it for completeness in case you add categorical features later.
+# It will simply not be applied if CATEGORICAL_FEATURES is empty.
 categorical_transformer = Pipeline(steps=[
     ('imputer', SimpleImputer(strategy='constant', fill_value='missing_category')), 
     ('onehot', OneHotEncoder(handle_unknown='ignore'))
@@ -88,7 +90,8 @@ categorical_transformer = Pipeline(steps=[
 preprocessor = ColumnTransformer(
     transformers=[
         ('num', numerical_transformer, NUMERICAL_FEATURES),
-        ('cat', categorical_transformer, CATEGORICAL_FEATURES) 
+        # Only include 'cat' transformer if there are actual categorical features
+        *((('cat', categorical_transformer, CATEGORICAL_FEATURES),) if CATEGORICAL_FEATURES else ())
     ])
 
 # Create a pipeline: preprocess then apply HistGradientBoostingClassifier
@@ -109,7 +112,7 @@ except Exception as e:
 @st.cache_data 
 def get_credit_score_ml(df_input: pd.DataFrame, approval_threshold: int): 
     """
-    Applies the simulated ML model to score a DataFrame of loan applications.
+    Applies the simulated ML model to score a DataFrame of credit applications.
     Performs robust NaN handling and type coercion before passing to the ML pipeline.
     """
     df_processed = df_input.copy()
@@ -149,7 +152,7 @@ def get_credit_score_ml(df_input: pd.DataFrame, approval_threshold: int):
     # Assuming class 0 (index 0) is "Good" and class 1 (index 1) is "Bad" based on TARGET column
     probabilities = model_pipeline.predict_proba(df_processed_for_prediction)
     
-    scores = probabilities[:, 0] * 100 # Probability of being a "Good" loan (Class 0)
+    scores = probabilities[:, 0] * 100 # Probability of being a "Good" (non-defaulting) applicant (Class 0)
 
     # Make decisions based on a threshold (can be tuned)
     decisions = np.where(scores >= approval_threshold, "Approved", "Rejected") 
@@ -238,8 +241,8 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-st.title("Credit Risk Dashboard (Powered by Gradient Boosting with Adjustable Threshold!)") # Updated Title
-st.subheader("Upload Credit Data and Analyze Risk") # Updated Subheader
+st.title("Credit Risk Dashboard (Powered by Gradient Boosting with Adjustable Threshold!)") 
+st.subheader("Upload Credit Data and Analyze Risk") 
 
 # --- Initialize S3 Client ---
 s3_client = None
@@ -279,10 +282,10 @@ def clear_file_uploader():
     st.session_state['file_uploader_key'] += 1
 
 # --- File Upload Section ---
-st.header("Upload Credit Data to S3") # Updated Header
+st.header("Upload Credit Data to S3") 
 uploaded_file = st.file_uploader(
-    "Choose a CSV file (.csv)", # Changed to CSV
-    type=["csv"], # Changed to CSV
+    "Choose a CSV file (.csv)", 
+    type=["csv"], 
     key=f"file_uploader_{st.session_state['file_uploader_key']}" 
 )
 
@@ -308,14 +311,14 @@ if uploaded_file is not None:
         st.error(f"Error uploading file to S3: {e}")
 
 # --- Dashboard Section for Analysis Trigger (Encapsulated in a Form) ---
-st.header("Analyze Credit Data from S3") # Updated Header
+st.header("Analyze Credit Data from S3") 
 
 s3_files = []
 try:
     if s3_client:
         response = s3_client.list_objects_v2(Bucket=s3_bucket_name, Prefix="uploads/")
         if 'Contents' in response:
-            s3_files = [obj['Key'] for obj in response['Contents'] if obj['Key'].endswith('.csv')] # Changed to CSV
+            s3_files = [obj['Key'] for obj in response['Contents'] if obj['Key'].endswith('.csv')] 
             s3_files.sort(reverse=True)
 except Exception as e:
     st.warning(f"Could not list files from S3 bucket: {e}. Ensure 'uploads/' prefix exists or bucket is not empty, and permissions are correct.")
@@ -335,7 +338,7 @@ with st.form("analysis_trigger_form"):
                 default_index = 0
 
         selected_s3_file_in_form = st.selectbox(
-            "Choose a CSV file from S3:", # Changed to CSV
+            "Choose a CSV file from S3:", 
             options=s3_files,
             index=default_index,
             key="s3_file_selector_form" 
@@ -365,17 +368,16 @@ if st.session_state['analyze_triggered'] and st.session_state['selected_file_for
     try:
         with st.spinner(f"Downloading and analyzing '{file_to_analyze}' from S3..."):
             obj = s3_client.get_object(Bucket=s3_bucket_name, Key=file_to_analyze)
-            # CHANGED: Read as CSV
             df = pd.read_csv(io.BytesIO(obj['Body'].read())) 
             st.write(f"DEBUG: Successfully read {len(df)} rows from CSV file.")
             st.write("DEBUG: Columns in loaded CSV file:", df.columns.tolist()) 
 
-            # NEW: Drop 'ID' column if it exists, as it's not a feature
+            # Drop 'ID' column if it exists, as it's not a feature
             if 'ID' in df.columns:
                 df = df.drop(columns=['ID'])
                 st.write("DEBUG: Dropped 'ID' column.")
 
-            # NEW: Ensure TARGET_COLUMN is integer type for classification
+            # Ensure TARGET_COLUMN is integer type for classification
             if TARGET_COLUMN in df.columns:
                 df[TARGET_COLUMN] = pd.to_numeric(df[TARGET_COLUMN], errors='coerce').fillna(0).astype(int)
                 st.write(f"DEBUG: '{TARGET_COLUMN}' column processed to integer type.")
@@ -384,7 +386,7 @@ if st.session_state['analyze_triggered'] and st.session_state['selected_file_for
                 st.session_state['scored_data'] = pd.DataFrame()
                 st.session_state['analyze_triggered'] = False
                 st.session_state['selected_file_for_analysis'] = None
-                st.stop() # Stop execution if target column is missing
+                st.stop() 
 
             results_df = get_credit_score_ml(df.copy(), st.session_state['approval_threshold']) 
             df_scored = pd.concat([df, results_df], axis=1)
@@ -418,32 +420,32 @@ if 'scored_data' in st.session_state and not st.session_state['scored_data'].emp
     df_display = st.session_state['scored_data']
     st.write("DEBUG: Displaying scored data.")
 
-    st.subheader("Full Credit Data with Scores and Decisions") # Updated Subheader
+    st.subheader("Full Credit Data with Scores and Decisions") 
     st.dataframe(df_display)
 
     # Adjustable Approval Threshold Slider
     st.markdown("---")
-    st.subheader("Adjust Risk Approval Threshold") # Updated Subheader
+    st.subheader("Adjust Risk Approval Threshold") 
     st.session_state['approval_threshold'] = st.slider(
         "Set Minimum Score for Approval:",
         min_value=0,
         max_value=100,
         value=st.session_state['approval_threshold'], 
         step=1,
-        help="Loans/applicants with a score equal to or above this value will be 'Approved'. Adjust to see impact on decisions.",
+        help="Applicants with a score equal to or above this value will be 'Approved'. Adjust to see impact on decisions.",
         key="approval_threshold_slider"
     )
     st.info(f"Current Approval Threshold: **{st.session_state['approval_threshold']}**")
     st.warning("Changing the threshold will re-evaluate all decisions. Click 'Analyze Selected File' again to apply.")
 
     # --- Dashboard Visualizations Section ---
-    st.header("Credit Performance Dashboard") # Updated Header
-    st.markdown("Dive into the top-performing and most vulnerable credit applications with interactive charts.") # Updated text
+    st.header("Credit Performance Dashboard") 
+    st.markdown("Dive into the top-performing and most vulnerable credit applications with interactive charts.") 
 
     col1, col2 = st.columns(2)
 
     with col1:
-        st.subheader("Top 10 Approved Applicants (Highest Scores)") # Updated Subheader
+        st.subheader("Top 10 Approved Applicants (Highest Scores)") 
         top_10_approved_loans = df_display[df_display['Decision'] == 'Approved'].sort_values(by='Score', ascending=False).head(10)
         
         if not top_10_approved_loans.empty:
@@ -452,9 +454,9 @@ if 'scored_data' in st.session_state and not st.session_state['scored_data'].emp
                 x=top_10_approved_loans.index, # Use DataFrame index as x-axis for unique ID representation
                 y='Score',
                 color_discrete_sequence=['#4CAF50'], 
-                title='Top 10 Approved Applicants by Score', # Updated Title
-                labels={top_10_approved_loans.index.name: 'Applicant ID', 'Score': 'Credit Score'}, # Updated Label
-                hover_data=NUMERICAL_FEATURES + CATEGORICAL_FEATURES + ['Decision'] # Show all relevant features on hover
+                title='Top 10 Approved Applicants by Score', 
+                labels={top_10_approved_loans.index.name: 'Applicant ID', 'Score': 'Credit Score'}, 
+                hover_data=NUMERICAL_FEATURES + CATEGORICAL_FEATURES + ['Decision'] 
             )
             fig_top10.update_layout(xaxis_tickangle=-45) 
             st.plotly_chart(fig_top10, use_container_width=True)
@@ -463,7 +465,7 @@ if 'scored_data' in st.session_state and not st.session_state['scored_data'].emp
 
 
     with col2:
-        st.subheader("Worst 10 Rejected Applicants (Lowest Scores)") # Updated Subheader
+        st.subheader("Worst 10 Rejected Applicants (Lowest Scores)") 
         worst_10_rejected_loans = df_display[df_display['Decision'] == 'Rejected'].sort_values(by='Score', ascending=True).head(10)
         
         if not worst_10_rejected_loans.empty:
@@ -472,8 +474,8 @@ if 'scored_data' in st.session_state and not st.session_state['scored_data'].emp
                 x=worst_10_rejected_loans.index, # Use DataFrame index as x-axis for unique ID representation
                 y='Score',
                 color_discrete_sequence=['#f44336'], 
-                title='Worst 10 Rejected Applicants by Score', # Updated Title
-                labels={worst_10_rejected_loans.index.name: 'Applicant ID', 'Score': 'Credit Score'}, # Updated Label
+                title='Worst 10 Rejected Applicants by Score', 
+                labels={worst_10_rejected_loans.index.name: 'Applicant ID', 'Score': 'Credit Score'}, 
                 hover_data=NUMERICAL_FEATURES + CATEGORICAL_FEATURES + ['Decision']
             )
             fig_worst10.update_layout(xaxis_tickangle=-45) 
@@ -497,14 +499,14 @@ if 'scored_data' in st.session_state and not st.session_state['scored_data'].emp
     st.plotly_chart(fig_hist, use_container_width=True)
 
     # Display the full vulnerable loans table as before
-    st.subheader("Rejected Applicants Summary") # Updated Subheader
+    st.subheader("Rejected Applicants Summary") 
     vulnerable_loans = df_display[df_display['Decision'] == 'Rejected']
 
     if not vulnerable_loans.empty:
         st.dataframe(vulnerable_loans)
-        st.info(f"Found {len(vulnerable_loans)} rejected applicants.") # Updated text
+        st.info(f"Found {len(vulnerable_loans)} rejected applicants.") 
     else:
-        st.success("No rejected applicants found in this dataset based on current threshold!") # Updated text
+        st.success("No rejected applicants found in this dataset based on current threshold!") 
 else:
     st.write("DEBUG: No scored data found in session state or data is empty. Dashboard not displayed.")
 
