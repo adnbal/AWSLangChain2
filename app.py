@@ -14,6 +14,8 @@ if 'analyze_triggered' not in st.session_state:
     st.session_state['analyze_triggered'] = False
 if 'last_uploaded_s3_key' not in st.session_state:
     st.session_state['last_uploaded_s3_key'] = None
+if 'selected_file_for_analysis' not in st.session_state:
+    st.session_state['selected_file_for_analysis'] = None
 
 # --- Dummy Credit Scoring Model ---
 def get_credit_score(data_row):
@@ -185,14 +187,15 @@ if uploaded_file is not None:
             s3_client.upload_fileobj(uploaded_file, s3_bucket_name, s3_file_key)
         st.success(f"File '{file_name}' uploaded successfully to S3 as '{s3_file_key}'!")
         st.session_state['last_uploaded_s3_key'] = s3_file_key
-        # Set trigger to false after upload, user will click analyze
-        st.session_state['analyze_triggered'] = False 
+        st.session_state['analyze_triggered'] = False # Reset trigger after upload
+        st.session_state['scored_data'] = pd.DataFrame() # Clear old data
         st.info("File uploaded. Please select it from the dropdown below and click 'Analyze'.")
         time.sleep(1) 
+        st.rerun() # Rerun to update the selectbox with the new file
     except Exception as e:
         st.error(f"Error uploading file to S3: {e}")
 
-# --- Dashboard Section ---
+# --- Dashboard Section for Analysis Trigger (Encapsulated in a Form) ---
 st.header("Analyze Loans from S3")
 
 s3_files = []
@@ -206,51 +209,51 @@ except Exception as e:
     st.warning(f"Could not list files from S3 bucket: {e}. Ensure 'uploads/' prefix exists or bucket is not empty, and permissions are correct.")
     s3_files = []
 
-selected_s3_file = None
-if s3_files:
-    default_index = 0
-    if st.session_state['last_uploaded_s3_key'] and st.session_state['last_uploaded_s3_key'] in s3_files:
-        try:
-            default_index = s3_files.index(st.session_state['last_uploaded_s3_key'])
-        except ValueError:
-            default_index = 0
+# --- Use a form to encapsulate the file selection and analysis trigger ---
+with st.form("analysis_trigger_form"):
+    st.markdown("### Select File for Analysis")
+    
+    selected_s3_file_in_form = None
+    if s3_files:
+        default_index = 0
+        if st.session_state['last_uploaded_s3_key'] and st.session_state['last_uploaded_s3_key'] in s3_files:
+            try:
+                default_index = s3_files.index(st.session_state['last_uploaded_s3_key'])
+            except ValueError:
+                default_index = 0
 
-    # Using on_change callback to reset analysis trigger if file selection changes
-    def on_file_select_change():
-        st.session_state['analyze_triggered'] = False
-        st.session_state['scored_data'] = pd.DataFrame() # Clear old data
-
-    selected_s3_file = st.selectbox(
-        "Select an Excel file from S3 to analyze:",
-        options=s3_files,
-        index=default_index,
-        key="s3_file_selector",
-        on_change=on_file_select_change # Callback when selectbox value changes
-    )
-else:
-    st.info("No Excel files found in the 'uploads/' folder of your S3 bucket. Please upload one above.")
-
-# --- Analyze Button and Logic (Using Session State Trigger) ---
-st.markdown("### Loan Analysis")
-
-# Button to trigger analysis
-if selected_s3_file:
-    if st.button(f"Analyze '{selected_s3_file}'", key="analyze_button"):
-        st.write("DEBUG: Analyze button was clicked. Setting analysis trigger to True.")
-        st.session_state['analyze_triggered'] = True
-        # Rerun immediately to process the analyze_triggered flag
-        st.rerun() # Using st.rerun() here is crucial to immediately process the state change
+        selected_s3_file_in_form = st.selectbox(
+            "Choose an Excel file from S3:",
+            options=s3_files,
+            index=default_index,
+            key="s3_file_selector_form" # Unique key for selectbox within form
+        )
     else:
-        st.write("DEBUG: Analyze button not yet clicked.")
-else:
-    st.info("Please select an Excel file from the dropdown to enable analysis.")
+        st.info("No Excel files found in the 'uploads/' folder of your S3 bucket. Please upload one above.")
+
+    # This is the button that submits the form and triggers analysis
+    analyze_submitted = st.form_submit_button(f"Analyze Selected File")
+
+    if analyze_submitted:
+        if selected_s3_file_in_form:
+            st.write(f"DEBUG: Analyze form submitted. Selected file: `{selected_s3_file_in_form}`. Starting analysis...")
+            st.session_state['selected_file_for_analysis'] = selected_s3_file_in_form # Store the selected file
+            st.session_state['analyze_triggered'] = True # Set the trigger
+            st.rerun() # Rerun to process the analysis trigger
+        else:
+            st.warning("Please select a file to analyze.")
+            st.session_state['analyze_triggered'] = False
+    else:
+        st.write("DEBUG: Analysis form not yet submitted.")
 
 # --- Perform Analysis if Triggered ---
-if st.session_state['analyze_triggered'] and selected_s3_file:
-    st.write("DEBUG: Analysis triggered via session state.")
+# This block runs on a subsequent rerun after the form is submitted
+if st.session_state['analyze_triggered'] and st.session_state['selected_file_for_analysis']:
+    file_to_analyze = st.session_state['selected_file_for_analysis']
+    st.write(f"DEBUG: Analysis triggered via session state for file: `{file_to_analyze}`.")
     try:
-        with st.spinner(f"Downloading and analyzing '{selected_s3_file}' from S3..."):
-            obj = s3_client.get_object(Bucket=s3_bucket_name, Key=selected_s3_file)
+        with st.spinner(f"Downloading and analyzing '{file_to_analyze}' from S3..."):
+            obj = s3_client.get_object(Bucket=s3_bucket_name, Key=file_to_analyze)
             excel_data = obj['Body'].read()
 
             df = pd.read_excel(io.BytesIO(excel_data))
@@ -262,21 +265,24 @@ if st.session_state['analyze_triggered'] and selected_s3_file:
             st.write(f"DEBUG: Scored data has {len(df_scored)} rows.")
 
             st.session_state['scored_data'] = df_scored
-            st.success(f"Analysis complete for '{selected_s3_file}'.")
+            st.success(f"Analysis complete for '{file_to_analyze}'.")
             st.session_state['analyze_triggered'] = False # Reset trigger after analysis
-            st.write("DEBUG: Analysis complete. Trigger reset.")
+            st.session_state['selected_file_for_analysis'] = None # Clear selected file after analysis
+            st.write("DEBUG: Analysis complete. Trigger and selected file reset.")
 
     except Exception as e:
         st.error(f"Error analyzing file from S3: {e}. Please check file format and column names in your Excel file.")
         st.write("DEBUG: An error occurred during analysis:", e)
         st.session_state['scored_data'] = pd.DataFrame()
         st.session_state['analyze_triggered'] = False # Reset trigger on error
+        st.session_state['selected_file_for_analysis'] = None # Clear selected file on error
 
 # --- Clear Data Button ---
 if st.session_state['scored_data'] is not None and not st.session_state['scored_data'].empty:
     if st.button("Clear Displayed Data", key="clear_data_button"):
         st.session_state['scored_data'] = pd.DataFrame()
         st.session_state['analyze_triggered'] = False
+        st.session_state['selected_file_for_analysis'] = None
         st.success("Displayed data cleared.")
         st.rerun() # Rerun to clear the display immediately
 
