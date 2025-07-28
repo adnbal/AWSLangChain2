@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import os # To demonstrate checking environment variables if needed
 
 # --- Dummy Credit Scoring Model ---
 # In a real-world scenario, this would be a trained machine learning model (e.g., Logistic Regression, Random Forest, XGBoost)
@@ -125,9 +126,9 @@ st.markdown(
         padding: 10px;
         border-radius: 8px;
         margin-top: 10px;
-        text-align: center;
         font-size: 1.5em;
         font-weight: bold;
+        text-align: center;
     }
     </style>
     """,
@@ -136,6 +137,38 @@ st.markdown(
 
 st.title("Dynamic Credit Scoring Application")
 st.subheader("Enter applicant details to get a credit score")
+
+# --- Accessing Secrets ---
+st.sidebar.header("Application Secrets (for demonstration)")
+try:
+    aws_access_key = st.secrets["aws_access_key_id"]
+    aws_secret_key = st.secrets["aws_secret_access_key"]
+    openai_key = st.secrets["openai_api_key"]
+    db_url = st.secrets["database_url"]
+    section_key = st.secrets["some_section"]["key_in_section"]
+
+    st.sidebar.write(f"AWS Access Key ID: `{aws_access_key[:4]}...`") # Show only first few chars
+    st.sidebar.write(f"AWS Secret Access Key: `{aws_secret_key[:4]}...`")
+    st.sidebar.write(f"OpenAI API Key: `{openai_key[:4]}...`")
+    st.sidebar.write(f"Database URL: `{db_url[:10]}...`")
+    st.sidebar.write(f"Key in section: `{section_key}`")
+
+    # In a real app, you would use these secrets to configure your clients:
+    # import boto3
+    # s3_client = boto3.client(
+    #     's3',
+    #     aws_access_key_id=aws_access_key,
+    #     aws_secret_access_key=aws_secret_key
+    # )
+    # os.environ["OPENAI_API_KEY"] = openai_key # For Langchain/OpenAI
+    # from langchain.llms import OpenAI
+    # llm = OpenAI()
+
+except KeyError as e:
+    st.sidebar.warning(f"Secret key not found: {e}. Please ensure your `.streamlit/secrets.toml` is configured correctly or secrets are set in Streamlit Cloud.")
+except Exception as e:
+    st.sidebar.error(f"An error occurred while loading secrets: {e}")
+
 
 # Input fields for the variables
 with st.form("credit_form"):
@@ -214,22 +247,19 @@ st.markdown(
     1.  **GitHub Repository:** You would create a GitHub repository containing:
         * `app.py` (the Streamlit application code)
         * `requirements.txt` (listing `streamlit`, `pandas`, `numpy`)
-        * Optionally, a `Procfile` if deploying to platforms like Heroku, or a `Dockerfile` for containerized deployments.
-    2.  **Streamlit Cloud:** You can easily deploy your Streamlit app from GitHub to [Streamlit Cloud](https://streamlit.io/cloud) by connecting your repository. Streamlit Cloud handles the hosting and environment setup.
+        * Optionally, a `.streamlit/config.toml` for app-specific configurations (but not secrets).
+    2.  **Streamlit Cloud:** You can easily deploy your Streamlit app from GitHub to [Streamlit Cloud](https://streamlit.io/cloud) by connecting your repository. Streamlit Cloud handles the hosting and environment setup. When deploying to Streamlit Cloud, you will be prompted to enter your secrets directly in their web interface, and they will be securely made available to your app via `st.secrets`.
 
     **To run this app locally:**
-    1.  Save the code above as `app.py`.
-    2.  Create a file named `requirements.txt` in the same directory with the following content:
-        ```
-        streamlit
-        pandas
-        numpy
-        ```
-    3.  Open your terminal, navigate to the directory where you saved the files, and run:
+    1.  Create a folder named `.streamlit` in the same directory as `app.py`.
+    2.  Inside the `.streamlit` folder, create a file named `secrets.toml` and add your secret keys as shown above.
+    3.  Save the code above as `app.py`.
+    4.  Ensure you have `requirements.txt` with `streamlit`, `pandas`, `numpy`.
+    5.  Open your terminal, navigate to the directory where you saved the files, and run:
         ```bash
         pip install -r requirements.txt
         streamlit run app.py
         ```
-    This will open the app in your web browser.
+    This will open the app in your web browser. You will see the secrets (partially masked) displayed in the sidebar.
     """
 )
