@@ -10,7 +10,8 @@ import time # For a small delay
 # Import scikit-learn components
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
-from sklearn.linear_model import LogisticRegression
+# CHANGED: Using HistGradientBoostingClassifier for a more advanced model
+from sklearn.ensemble import HistGradientBoostingClassifier 
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer 
 
@@ -29,29 +30,31 @@ ALL_FEATURES = NUMERICAL_FEATURES + CATEGORICAL_FEATURES
 # --- Simulate Model Training and Preprocessing ---
 # In a real scenario, this would be done offline and saved/loaded.
 dummy_data_for_training = pd.DataFrame({
-    'LOAN': [10000, 20000, 5000, 15000, 8000],
-    'MORTDUE': [0, 50000, 0, 20000, 10000],
-    'VALUE': [50000, 100000, 30000, 75000, 60000],
-    'REASON': ['DebtCon', 'HomeImp', 'Other', 'DebtCon', 'HomeImp'],
-    'JOB': ['Mgr', 'ProfExe', 'Office', 'Sales', 'Self'],
-    'YOJ': [5, 10, 2, 7, 15],
-    'DEROG': [0, 1, 0, 0, 2],
-    'DELINQ': [0, 0, 1, 0, 0],
-    'CLAGE': [100, 200, 50, 150, 120],
-    'NINQ': [0, 1, 0, 2, 0],
-    'CLNO': [10, 15, 5, 12, 8],
-    'DEBTINC': [35.0, 40.0, 25.0, 30.0, 45.0],
-    'BAD': [0, 1, 0, 1, 0] # Dummy target variable
+    'LOAN': [10000, 20000, 5000, 15000, 8000, 12000, 7000, 18000, 9000, 6000],
+    'MORTDUE': [0, 50000, 0, 20000, 10000, 30000, 5000, 40000, 15000, 2000],
+    'VALUE': [50000, 100000, 30000, 75000, 60000, 80000, 40000, 120000, 70000, 35000],
+    'REASON': ['DebtCon', 'HomeImp', 'Other', 'DebtCon', 'HomeImp', 'DebtCon', 'Other', 'HomeImp', 'DebtCon', 'Other'],
+    'JOB': ['Mgr', 'ProfExe', 'Office', 'Sales', 'Self', 'Mgr', 'Office', 'ProfExe', 'Sales', 'Self'],
+    'YOJ': [5, 10, 2, 7, 15, 8, 3, 12, 6, 18],
+    'DEROG': [0, 1, 0, 0, 2, 0, 0, 1, 0, 0],
+    'DELINQ': [0, 0, 1, 0, 0, 0, 0, 0, 1, 0],
+    'CLAGE': [100, 200, 50, 150, 120, 180, 60, 220, 90, 250],
+    'NINQ': [0, 1, 0, 2, 0, 1, 0, 0, 1, 0],
+    'CLNO': [10, 15, 5, 12, 8, 11, 6, 14, 9, 16],
+    'DEBTINC': [35.0, 40.0, 25.0, 30.0, 45.0, 38.0, 28.0, 42.0, 33.0, 20.0],
+    'BAD': [0, 1, 0, 1, 0, 0, 1, 0, 1, 0] # Dummy target variable
 })
 
 # Define preprocessing steps
+# Numerical features: Impute with mean, then scale
 numerical_transformer = Pipeline(steps=[
-    ('imputer', SimpleImputer(strategy='mean')), # Impute missing numerical values with the mean
+    ('imputer', SimpleImputer(strategy='mean')), 
     ('scaler', StandardScaler())
 ])
 
+# Categorical features: Impute with 'missing', then one-hot encode
 categorical_transformer = Pipeline(steps=[
-    ('imputer', SimpleImputer(strategy='constant', fill_value='missing')), # Fill NaNs in categorical
+    ('imputer', SimpleImputer(strategy='constant', fill_value='missing_category')), 
     ('onehot', OneHotEncoder(handle_unknown='ignore'))
 ])
 
@@ -61,16 +64,17 @@ preprocessor = ColumnTransformer(
         ('cat', categorical_transformer, CATEGORICAL_FEATURES) 
     ])
 
-# Create a pipeline: preprocess then apply logistic regression
+# Create a pipeline: preprocess then apply HistGradientBoostingClassifier
 model_pipeline = Pipeline(steps=[
     ('preprocessor', preprocessor),
-    ('classifier', LogisticRegression(solver='liblinear', random_state=42, class_weight='balanced'))
+    # CHANGED: Using HistGradientBoostingClassifier
+    ('classifier', HistGradientBoostingClassifier(random_state=42)) 
 ])
 
 # "Fit" the pipeline on the dummy data
 try:
     model_pipeline.fit(dummy_data_for_training[ALL_FEATURES], dummy_data_for_training['BAD'])
-    st.sidebar.success("Simulated ML model and preprocessor initialized.")
+    st.sidebar.success("Simulated ML model (HistGradientBoostingClassifier) and preprocessor initialized.")
 except Exception as e:
     st.sidebar.error(f"Error initializing simulated ML model: {e}")
     st.stop() 
@@ -92,37 +96,27 @@ def get_credit_score_ml(df_input: pd.DataFrame):
     for col in ALL_FEATURES:
         if col not in df_processed.columns:
             if col in NUMERICAL_FEATURES:
-                df_processed[col] = 0.0 # Use float for numerical defaults
+                df_processed[col] = 0.0 
             elif col in CATEGORICAL_FEATURES:
-                df_processed[col] = 'missing_category' # Use a distinct string for missing categories
+                df_processed[col] = 'missing_category' 
     
     # 2. Coerce numerical columns to numeric type, converting any non-numeric values to NaN
-    # This is crucial if Excel data has mixed types or text that should be numbers.
     for col in NUMERICAL_FEATURES:
         df_processed[col] = pd.to_numeric(df_processed[col], errors='coerce')
-        # Explicitly fill NaNs in numerical columns after coercion, before pipeline
-        # This catches any NaNs that might result from 'coerce' or original data
-        # If the entire column is NaN, fill with 0.0, otherwise fill with its mean.
-        if df_processed[col].isnull().all():
-            df_processed[col] = 0.0
-        else:
-            df_processed[col] = df_processed[col].fillna(df_processed[col].mean())
+        # The SimpleImputer in the pipeline will handle these NaNs.
+        # No need for explicit fillna here anymore, as HistGradientBoostingClassifier handles NaNs.
+        # However, the numerical_transformer's SimpleImputer will still fill them for consistency.
 
     # 3. Explicitly fill NaNs in categorical columns and ensure they are string type
     for col in CATEGORICAL_FEATURES:
-        # Ensure categorical columns are string type to avoid issues with OneHotEncoder
         df_processed[col] = df_processed[col].astype(str).replace('nan', 'missing_category')
-        # The .replace('nan', 'missing_category') handles string 'nan' which can appear
-        # if original data had NaNs that were converted to string 'nan' by astype(str)
-        df_processed[col] = df_processed[col].fillna('missing_category') # Final fillna for any remaining NaNs
+        df_processed[col] = df_processed[col].fillna('missing_category') 
 
 
     # Select and reorder columns to match the training order
-    # At this point, df_processed_for_prediction should contain NO NaNs.
     df_processed_for_prediction = df_processed[ALL_FEATURES]
 
     st.write("DEBUG: DataFrame info before ML prediction:")
-    # Use st.text to display df.info() output directly in Streamlit
     buffer = io.StringIO()
     df_processed_for_prediction.info(buf=buffer)
     st.text(buffer.getvalue())
@@ -130,10 +124,11 @@ def get_credit_score_ml(df_input: pd.DataFrame):
 
 
     # Predict probabilities (probability of BAD=1, BAD=0)
+    # HistGradientBoostingClassifier.predict_proba returns probabilities for each class
     probabilities = model_pipeline.predict_proba(df_processed_for_prediction)
     
     # Assuming class 0 is "Good" and class 1 is "Bad"
-    scores = probabilities[:, 0] * 100 
+    scores = probabilities[:, 0] * 100 # Probability of being a "Good" loan
 
     # Make decisions based on a threshold (can be tuned)
     decisions = np.where(scores >= 50, "Approved", "Rejected") 
@@ -222,7 +217,7 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-st.title("Credit Scoring Dashboard with S3 Integration (ML Powered)")
+st.title("Credit Scoring Dashboard with S3 Integration (Powered by Gradient Boosting!)") # Updated Title
 st.subheader("Upload Excel files and analyze loan vulnerability")
 
 # --- Initialize S3 Client ---
