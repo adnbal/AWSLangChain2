@@ -25,9 +25,12 @@ st.session_state.setdefault('last_uploaded_s3_key', None)
 st.session_state.setdefault('selected_file_for_analysis', None)
 st.session_state.setdefault('file_uploader_key', 0) 
 st.session_state.setdefault('approval_threshold', 50) # Default approval threshold
+st.session_state.setdefault('uploaded_df_columns', []) # To store columns of the last uploaded file
+st.session_state.setdefault('selected_target_column', 'Default') # NEW: Default target column name is 'Default'
 
-# --- Define Feature Columns for the NEW 'credit.csv' dataset ---
-# CHANGED: BanruptcyInd moved to NUMERICAL_FEATURES
+# --- Define Feature Columns for the 'credit.csv' dataset ---
+# These are the FEATURES that the ML model will use for prediction.
+# The actual target column will be selected by the user.
 NUMERICAL_FEATURES = [
     'DerogCnt', 'CollectCnt', 'BanruptcyInd', 'InqCnt06', 'InqTimeLast', 'InqFinanceCnt24',
     'TLTimeFirst', 'TLTimeLast', 'TLCnt03', 'TLCnt12', 'TLCnt24', 'TLCnt',
@@ -35,17 +38,22 @@ NUMERICAL_FEATURES = [
     'TL75UtilCnt', 'TL50UtilCnt', 'TLBalHCPct', 'TLSatPct', 'TLDel3060Cnt24',
     'TLDel90Cnt24', 'TLDel60CntAll', 'TLOpenPct', 'TLBadDerogCnt', 'TLOpen24Pct'
 ]
-CATEGORICAL_FEATURES = [] # No explicit categorical features based on the provided header and common usage
-TARGET_COLUMN = 'TARGET' # The column to predict
+CATEGORICAL_FEATURES = [] # Based on previous analysis, no explicit categorical features
 
-ALL_FEATURES = NUMERICAL_FEATURES + CATEGORICAL_FEATURES
+# The actual target column name from the uploaded CSV, now set to 'Default'
+TARGET_COLUMN = 'Default' 
+
+# ALL_FEATURES will be dynamically constructed based on user's target column selection.
+# For dummy training, we'll use a fixed 'Default' column.
+DUMMY_TARGET_COLUMN_NAME = TARGET_COLUMN 
 
 # --- Simulate Model Training and Preprocessing for the NEW dataset ---
 # This dummy data MUST have the same column names and types as your actual CSV.
+# It's used to initialize the model pipeline structure.
 dummy_data_for_training = pd.DataFrame({
     'DerogCnt': [1, 0, 2, 0, 1, 0],
     'CollectCnt': [0, 1, 0, 0, 0, 1],
-    'BanruptcyInd': [0, 1, 0, 0, 0, 1], # Now correctly treated as numerical
+    'BanruptcyInd': [0, 1, 0, 0, 0, 1], 
     'InqCnt06': [3, 1, 5, 2, 0, 4],
     'InqTimeLast': [10, 5, 15, 8, 20, 12],
     'InqFinanceCnt24': [2, 1, 3, 1, 0, 2],
@@ -70,7 +78,7 @@ dummy_data_for_training = pd.DataFrame({
     'TLOpenPct': [0.5, 0.3, 0.6, 0.4, 0.2, 0.55],
     'TLBadDerogCnt': [0, 1, 0, 0, 1, 0],
     'TLOpen24Pct': [0.7, 0.4, 0.8, 0.5, 0.3, 0.75],
-    'TARGET': [0, 1, 0, 0, 1, 1] # Dummy target variable (0: Good, 1: Bad)
+    DUMMY_TARGET_COLUMN_NAME: [0, 1, 0, 0, 1, 1] # Dummy target variable (0: Good, 1: Bad)
 })
 
 # Define preprocessing steps
@@ -79,9 +87,6 @@ numerical_transformer = Pipeline(steps=[
     ('scaler', StandardScaler())
 ])
 
-# If there are no categorical features, this transformer is not strictly needed in ColumnTransformer,
-# but keeping it for completeness in case you add categorical features later.
-# It will simply not be applied if CATEGORICAL_FEATURES is empty.
 categorical_transformer = Pipeline(steps=[
     ('imputer', SimpleImputer(strategy='constant', fill_value='missing_category')), 
     ('onehot', OneHotEncoder(handle_unknown='ignore'))
@@ -90,7 +95,6 @@ categorical_transformer = Pipeline(steps=[
 preprocessor = ColumnTransformer(
     transformers=[
         ('num', numerical_transformer, NUMERICAL_FEATURES),
-        # Only include 'cat' transformer if there are actual categorical features
         *((('cat', categorical_transformer, CATEGORICAL_FEATURES),) if CATEGORICAL_FEATURES else ())
     ])
 
@@ -102,7 +106,10 @@ model_pipeline = Pipeline(steps=[
 
 # "Fit" the pipeline on the dummy data
 try:
-    model_pipeline.fit(dummy_data_for_training[ALL_FEATURES], dummy_data_for_training[TARGET_COLUMN])
+    # Ensure dummy data has all necessary columns for fitting preprocessor
+    dummy_features = NUMERICAL_FEATURES + CATEGORICAL_FEATURES
+    
+    model_pipeline.fit(dummy_data_for_training[dummy_features], dummy_data_for_training[DUMMY_TARGET_COLUMN_NAME])
     st.sidebar.success("Simulated ML model (HistGradientBoostingClassifier) and preprocessor initialized for new data.")
 except Exception as e:
     st.sidebar.error(f"Error initializing simulated ML model: {e}")
@@ -110,15 +117,18 @@ except Exception as e:
 
 # --- Credit Scoring Function using the ML Model ---
 @st.cache_data 
-def get_credit_score_ml(df_input: pd.DataFrame, approval_threshold: int): 
+def get_credit_score_ml(df_input: pd.DataFrame, approval_threshold: int, actual_target_column: str): 
     """
     Applies the simulated ML model to score a DataFrame of credit applications.
     Performs robust NaN handling and type coercion before passing to the ML pipeline.
     """
     df_processed = df_input.copy()
 
+    # Define features to be used for prediction (excluding the actual target column)
+    features_for_prediction = [col for col in NUMERICAL_FEATURES + CATEGORICAL_FEATURES if col != actual_target_column]
+
     # Ensure all expected feature columns exist. Add if missing with default values.
-    for col in ALL_FEATURES:
+    for col in features_for_prediction:
         if col not in df_processed.columns:
             if col in NUMERICAL_FEATURES:
                 df_processed[col] = 0.0 
@@ -127,18 +137,18 @@ def get_credit_score_ml(df_input: pd.DataFrame, approval_threshold: int):
     
     # Coerce numerical columns to numeric type, converting any non-numeric values to NaN
     for col in NUMERICAL_FEATURES:
-        df_processed[col] = pd.to_numeric(df_processed[col], errors='coerce')
-        # The SimpleImputer in the pipeline will handle these NaNs.
-        # No need for explicit fillna here anymore, as HistGradientBoostingClassifier handles NaNs.
-        # However, the numerical_transformer's SimpleImputer will still fill them for consistency.
+        if col in df_processed.columns: # Only process if column exists after previous checks
+            df_processed[col] = pd.to_numeric(df_processed[col], errors='coerce')
 
     # Explicitly fill NaNs in categorical columns and ensure they are string type
     for col in CATEGORICAL_FEATURES:
-        df_processed[col] = df_processed[col].astype(str).replace('nan', 'missing_category')
-        df_processed[col] = df_processed[col].fillna('missing_category') 
+        if col in df_processed.columns: # Only process if column exists after previous checks
+            df_processed[col] = df_processed[col].astype(str).replace('nan', 'missing_category')
+            df_processed[col] = df_processed[col].fillna('missing_category') 
 
     # Select and reorder columns to match the training order
-    df_processed_for_prediction = df_processed[ALL_FEATURES]
+    # Ensure only the actual features are passed to the model
+    df_processed_for_prediction = df_processed[features_for_prediction]
 
     st.write("DEBUG: DataFrame info before ML prediction:")
     buffer = io.StringIO()
@@ -147,14 +157,12 @@ def get_credit_score_ml(df_input: pd.DataFrame, approval_threshold: int):
     st.write(f"DEBUG: Total NaNs in data before prediction: {df_processed_for_prediction.isnull().sum().sum()}")
 
 
-    # Predict probabilities (probability of BAD=1, BAD=0)
-    # HistGradientBoostingClassifier.predict_proba returns probabilities for each class
-    # Assuming class 0 (index 0) is "Good" and class 1 (index 1) is "Bad" based on TARGET column
     probabilities = model_pipeline.predict_proba(df_processed_for_prediction)
     
-    scores = probabilities[:, 0] * 100 # Probability of being a "Good" (non-defaulting) applicant (Class 0)
+    # Assuming class 0 (index 0) is "Good" and class 1 (index 1) is "Bad" (Default)
+    # So, score is probability of NOT defaulting (Class 0)
+    scores = probabilities[:, 0] * 100 
 
-    # Make decisions based on a threshold (can be tuned)
     decisions = np.where(scores >= approval_threshold, "Approved", "Rejected") 
 
     return pd.DataFrame({'Score': scores, 'Decision': decisions})
@@ -346,17 +354,46 @@ with st.form("analysis_trigger_form"):
     else:
         st.info("No CSV files found in the 'uploads/' folder of your S3 bucket. Please upload one above.")
 
+    # NEW: Target Column Selector
+    if selected_s3_file_in_form:
+        # Temporarily read the file to get columns for the selector
+        try:
+            temp_obj = s3_client.get_object(Bucket=s3_bucket_name, Key=selected_s3_file_in_form)
+            temp_df = pd.read_csv(io.BytesIO(temp_obj['Body'].read()))
+            st.session_state['uploaded_df_columns'] = temp_df.columns.tolist()
+            
+            # Try to pre-select 'Default' if it exists, otherwise default to first column
+            default_target_idx = 0
+            if TARGET_COLUMN in st.session_state['uploaded_df_columns']:
+                default_target_idx = st.session_state['uploaded_df_columns'].index(TARGET_COLUMN)
+            elif len(st.session_state['uploaded_df_columns']) > 0:
+                # If 'Default' not found, try to use the first column as a fallback
+                st.warning(f"'{TARGET_COLUMN}' column not found. Please select the correct target column.")
+                default_target_idx = 0 # Default to the very first column
+
+            st.session_state['selected_target_column'] = st.selectbox(
+                "Select the Target Column (e.g., 'Default', 'TARGET'):",
+                options=st.session_state['uploaded_df_columns'],
+                index=default_target_idx,
+                key="target_column_selector"
+            )
+        except Exception as e:
+            st.error(f"Error reading selected file to get columns: {e}")
+            st.session_state['uploaded_df_columns'] = [] # Clear columns on error
+            st.session_state['selected_target_column'] = '' # Clear selected target
+            st.stop() # Stop execution if columns cannot be read
+
     # This is the button that submits the form and triggers analysis
     analyze_submitted = st.form_submit_button(f"Analyze Selected File")
 
     if analyze_submitted:
-        if selected_s3_file_in_form:
-            st.write(f"DEBUG: Analyze form submitted. Selected file: `{selected_s3_file_in_form}`. Starting analysis...")
+        if selected_s3_file_in_form and st.session_state['selected_target_column']:
+            st.write(f"DEBUG: Analyze form submitted. Selected file: `{selected_s3_file_in_form}`. Target column: `{st.session_state['selected_target_column']}`. Starting analysis...")
             st.session_state['selected_file_for_analysis'] = selected_s3_file_in_form 
             st.session_state['analyze_triggered'] = True 
             st.rerun() 
         else:
-            st.warning("Please select a file to analyze.")
+            st.warning("Please select a file and a target column to analyze.")
             st.session_state['analyze_triggered'] = False
     else:
         st.write("DEBUG: Analysis form not yet submitted.")
@@ -364,7 +401,15 @@ with st.form("analysis_trigger_form"):
 # --- Perform Analysis if Triggered ---
 if st.session_state['analyze_triggered'] and st.session_state['selected_file_for_analysis']:
     file_to_analyze = st.session_state['selected_file_for_analysis']
-    st.write(f"DEBUG: Analysis triggered via session state for file: `{file_to_analyze}`.")
+    actual_target_col_name = st.session_state['selected_target_column']
+
+    if not actual_target_col_name:
+        st.error("No target column selected. Please select one from the dropdown.")
+        st.session_state['analyze_triggered'] = False
+        st.session_state['selected_file_for_analysis'] = None
+        st.stop()
+
+    st.write(f"DEBUG: Analysis triggered via session state for file: `{file_to_analyze}` with target column `{actual_target_col_name}`.")
     try:
         with st.spinner(f"Downloading and analyzing '{file_to_analyze}' from S3..."):
             obj = s3_client.get_object(Bucket=s3_bucket_name, Key=file_to_analyze)
@@ -377,18 +422,19 @@ if st.session_state['analyze_triggered'] and st.session_state['selected_file_for
                 df = df.drop(columns=['ID'])
                 st.write("DEBUG: Dropped 'ID' column.")
 
-            # Ensure TARGET_COLUMN is integer type for classification
-            if TARGET_COLUMN in df.columns:
-                df[TARGET_COLUMN] = pd.to_numeric(df[TARGET_COLUMN], errors='coerce').fillna(0).astype(int)
-                st.write(f"DEBUG: '{TARGET_COLUMN}' column processed to integer type.")
+            # Ensure the selected target column is present and is integer type for classification
+            if actual_target_col_name in df.columns:
+                df[actual_target_col_name] = pd.to_numeric(df[actual_target_col_name], errors='coerce').fillna(0).astype(int)
+                st.write(f"DEBUG: '{actual_target_col_name}' column processed to integer type.")
             else:
-                st.warning(f"'{TARGET_COLUMN}' column not found in the uploaded data. Please ensure your CSV has a '{TARGET_COLUMN}' column for scoring.")
+                st.error(f"The selected target column '{actual_target_col_name}' was not found in the uploaded data. Please check your CSV and select the correct column.")
                 st.session_state['scored_data'] = pd.DataFrame()
                 st.session_state['analyze_triggered'] = False
                 st.session_state['selected_file_for_analysis'] = None
                 st.stop() 
 
-            results_df = get_credit_score_ml(df.copy(), st.session_state['approval_threshold']) 
+            # Pass the actual_target_col_name to the scoring function
+            results_df = get_credit_score_ml(df.copy(), st.session_state['approval_threshold'], actual_target_col_name) 
             df_scored = pd.concat([df, results_df], axis=1)
             st.write(f"DEBUG: Scored data has {len(df_scored)} rows.")
 
