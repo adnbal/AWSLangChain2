@@ -80,7 +80,7 @@ except Exception as e:
 def get_credit_score_ml(df_input: pd.DataFrame):
     """
     Applies the simulated ML model to score a DataFrame of loan applications.
-    Performs robust NaN handling before passing to the ML pipeline.
+    Performs robust NaN handling and type coercion before passing to the ML pipeline.
     """
     # Create a copy to avoid modifying the original DataFrame passed to the cached function
     df_processed = df_input.copy()
@@ -88,27 +88,34 @@ def get_credit_score_ml(df_input: pd.DataFrame):
     # --- Robust NaN Handling and Type Coercion BEFORE Pipeline ---
 
     # 1. Ensure all expected feature columns exist. Add if missing with default values.
-    for col in NUMERICAL_FEATURES:
+    # This also helps ensure correct column order for the ColumnTransformer.
+    for col in ALL_FEATURES:
         if col not in df_processed.columns:
-            df_processed[col] = 0.0 # Use float for numerical defaults
-    for col in CATEGORICAL_FEATURES:
-        if col not in df_processed.columns:
-            df_processed[col] = 'missing_category' # Use a distinct string for missing categories
-
+            if col in NUMERICAL_FEATURES:
+                df_processed[col] = 0.0 # Use float for numerical defaults
+            elif col in CATEGORICAL_FEATURES:
+                df_processed[col] = 'missing_category' # Use a distinct string for missing categories
+    
     # 2. Coerce numerical columns to numeric type, converting any non-numeric values to NaN
     # This is crucial if Excel data has mixed types or text that should be numbers.
     for col in NUMERICAL_FEATURES:
         df_processed[col] = pd.to_numeric(df_processed[col], errors='coerce')
         # Explicitly fill NaNs in numerical columns after coercion, before pipeline
         # This catches any NaNs that might result from 'coerce' or original data
-        df_processed[col] = df_processed[col].fillna(df_processed[col].mean() if not df_processed[col].isnull().all() else 0.0)
         # If the entire column is NaN, fill with 0.0, otherwise fill with its mean.
+        if df_processed[col].isnull().all():
+            df_processed[col] = 0.0
+        else:
+            df_processed[col] = df_processed[col].fillna(df_processed[col].mean())
 
-    # 3. Explicitly fill NaNs in categorical columns
+    # 3. Explicitly fill NaNs in categorical columns and ensure they are string type
     for col in CATEGORICAL_FEATURES:
         # Ensure categorical columns are string type to avoid issues with OneHotEncoder
-        df_processed[col] = df_processed[col].astype(str)
-        df_processed[col] = df_processed[col].fillna('missing_category') # Fill NaNs with a specific string
+        df_processed[col] = df_processed[col].astype(str).replace('nan', 'missing_category')
+        # The .replace('nan', 'missing_category') handles string 'nan' which can appear
+        # if original data had NaNs that were converted to string 'nan' by astype(str)
+        df_processed[col] = df_processed[col].fillna('missing_category') # Final fillna for any remaining NaNs
+
 
     # Select and reorder columns to match the training order
     # At this point, df_processed_for_prediction should contain NO NaNs.
@@ -119,7 +126,7 @@ def get_credit_score_ml(df_input: pd.DataFrame):
     buffer = io.StringIO()
     df_processed_for_prediction.info(buf=buffer)
     st.text(buffer.getvalue())
-    st.write("DEBUG: Checking for NaNs after explicit imputation:", df_processed_for_prediction.isnull().sum().sum())
+    st.write(f"DEBUG: Total NaNs in data before prediction: {df_processed_for_prediction.isnull().sum().sum()}")
 
 
     # Predict probabilities (probability of BAD=1, BAD=0)
@@ -410,4 +417,9 @@ st.markdown(
     * **Logging & Monitoring (CloudWatch):** To track app performance, S3 interactions, and potential errors, providing insights for operational management.
 
     ### 🔗 Langchain Integration:
-    Langchain is primarily used for building applications with Large Language Models (LLMs). 
+    Langchain is primarily used for building applications with Large Language Models (LLMs). It could enhance this application in several ways:
+    * **Explainable AI (XAI):** After identifying vulnerable loans, Langchain could prompt an LLM to generate more detailed, human-readable explanations for *why* specific loans were flagged as vulnerable, based on their input features.
+    * **Conversational Interface:** Users could interact with the dashboard using natural language queries (e.g., "Show me all rejected loans with a debt-to-income ratio above 40%"), with Langchain interpreting the query and dynamically filtering the DataFrame.
+    * **Automated Reporting:** Langchain could help generate summary reports or alerts for vulnerable loans, potentially integrating with email services to notify relevant stakeholders.
+    """
+)
