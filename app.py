@@ -7,6 +7,7 @@ import datetime # For unique file naming
 import os
 import time # For a small delay
 import json # For parsing LLM structured output
+import asyncio # For running async functions in a synchronous context
 
 # Import scikit-learn components
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
@@ -208,10 +209,11 @@ def get_credit_score_ml(df_input: pd.DataFrame, approval_threshold: int, actual_
     return pd.DataFrame({'Score': scores, 'Decision': decisions})
 
 
-# --- LLM Integration for Explanations ---
-async def get_llm_explanation(features_dict: dict, score: float, decision: str):
+# --- LLM Integration for Explanations (MODIFIED TO BE SYNCHRONOUS) ---
+def get_llm_explanation(features_dict: dict, score: float, decision: str):
     """
     Calls a Gemini LLM to get an explanation for a loan decision.
+    This function is now synchronous and uses asyncio.run() internally for the fetch call.
     """
     prompt = f"""
     You are an expert credit risk analyst. Based on the following loan application features, 
@@ -225,21 +227,30 @@ async def get_llm_explanation(features_dict: dict, score: float, decision: str):
     """
     
     chatHistory = []
-    chatHistory.push({ "role": "user", "parts": [{ "text": prompt }] })
+    chatHistory.append({ "role": "user", "parts": [{ "text": prompt }] }) # Corrected from .push to .append
     
-    # Use empty string for API key as per instructions for Canvas runtime
     apiKey = "" 
     apiUrl = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={apiKey}"
     
     try:
-        response = await st.experimental_memo(fetch)(
-            apiUrl,
-            method='POST',
-            headers={'Content-Type': 'application/json'},
-            body=json.dumps({"contents": chatHistory})
-        )
-        
-        result = await response.json()
+        # Define an inner async function to perform the actual fetch
+        async def _fetch_explanation_async():
+            response = await st.experimental_memo(fetch)( # `fetch` is assumed to be async
+                apiUrl,
+                method='POST',
+                headers={'Content-Type': 'application/json'},
+                body=json.dumps({"contents": chatHistory})
+            )
+            return await response.json()
+
+        # Run the async fetch operation in the current event loop, or create a new one
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError: # No running loop
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+        result = loop.run_until_complete(_fetch_explanation_async())
         
         if result and result.get('candidates') and len(result['candidates']) > 0 and \
            result['candidates'][0].get('content') and result['candidates'][0]['content'].get('parts') and \
@@ -725,9 +736,9 @@ if 'scored_data' in st.session_state and not st.session_state['scored_data'].emp
             loan_features = row[NUMERICAL_FEATURES + CATEGORICAL_FEATURES].dropna().to_dict()
 
             with st.expander(f"Explain why Loan ID: **{loan_id}** (Score: {score:.2f}, Decision: {decision}) was rejected"):
-                # Use st.spinner for asynchronous LLM call
+                # Use st.spinner for synchronous LLM call
                 with st.spinner(f"Generating explanation for {loan_id}..."):
-                    explanation = await get_llm_explanation(loan_features, score, decision)
+                    explanation = get_llm_explanation(loan_features, score, decision) # No 'await' here
                     st.markdown(explanation)
     else:
         st.info("No rejected loans to generate explanations for at the current threshold.")
