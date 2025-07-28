@@ -10,12 +10,11 @@ import time # For a small delay
 # Import scikit-learn components
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
-# CHANGED: Using HistGradientBoostingClassifier for a more advanced model
 from sklearn.ensemble import HistGradientBoostingClassifier 
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer 
 
-# NEW: Import Plotly for fancy visualizations
+# Import Plotly for fancy visualizations
 import plotly.express as px
 import plotly.graph_objects as go
 
@@ -25,38 +24,62 @@ st.session_state.setdefault('analyze_triggered', False)
 st.session_state.setdefault('last_uploaded_s3_key', None)
 st.session_state.setdefault('selected_file_for_analysis', None)
 st.session_state.setdefault('file_uploader_key', 0) 
+st.session_state.setdefault('approval_threshold', 50) # Default approval threshold
 
-# --- Define Feature Columns (based on your homeequity.xlsx) ---
-NUMERICAL_FEATURES = ['LOAN', 'MORTDUE', 'VALUE', 'YOJ', 'DEROG', 'DELINQ', 'CLAGE', 'NINQ', 'CLNO', 'DEBTINC']
-CATEGORICAL_FEATURES = ['REASON', 'JOB']
+# --- Define Feature Columns for the NEW 'credit.csv' dataset ---
+# Based on the header: TARGET,ID,DerogCnt,CollectCnt,BanruptcyInd,InqCnt06,InqTimeLast,InqFinanceCnt24,TLTimeFirst,TLTimeLast,TLCnt03,TLCnt12,TLCnt24,TLCnt,TLSum,TLMaxSum,TLSatCnt,TLDel60Cnt,TLBadCnt24,TL75UtilCnt,TL50UtilCnt,TLBalHCPct,TLSatPct,TLDel3060Cnt24,TLDel90Cnt24,TLDel60CntAll,TLOpenPct,TLBadDerogCnt,TLDel60Cnt24,TLOpen24Pct
+# Note: TLDel60Cnt24 appears twice in the provided header, assuming one is a typo or redundant.
+NUMERICAL_FEATURES = [
+    'DerogCnt', 'CollectCnt', 'InqCnt06', 'InqTimeLast', 'InqFinanceCnt24',
+    'TLTimeFirst', 'TLTimeLast', 'TLCnt03', 'TLCnt12', 'TLCnt24', 'TLCnt',
+    'TLSum', 'TLMaxSum', 'TLSatCnt', 'TLDel60Cnt', 'TLBadCnt24',
+    'TL75UtilCnt', 'TL50UtilCnt', 'TLBalHCPct', 'TLSatPct', 'TLDel3060Cnt24',
+    'TLDel90Cnt24', 'TLDel60CntAll', 'TLOpenPct', 'TLBadDerogCnt', 'TLOpen24Pct'
+]
+CATEGORICAL_FEATURES = ['BanruptcyInd'] # Assuming this is a binary indicator that might be treated as categorical if not strictly 0/1 numeric
+TARGET_COLUMN = 'TARGET' # The column to predict
+
 ALL_FEATURES = NUMERICAL_FEATURES + CATEGORICAL_FEATURES
 
-# --- Simulate Model Training and Preprocessing ---
-# In a real scenario, this would be done offline and saved/loaded.
+# --- Simulate Model Training and Preprocessing for the NEW dataset ---
+# This dummy data MUST have the same column names and types as your actual CSV.
 dummy_data_for_training = pd.DataFrame({
-    'LOAN': [10000, 20000, 5000, 15000, 8000, 12000, 7000, 18000, 9000, 6000],
-    'MORTDUE': [0, 50000, 0, 20000, 10000, 30000, 5000, 40000, 15000, 2000],
-    'VALUE': [50000, 100000, 30000, 75000, 60000, 80000, 40000, 120000, 70000, 35000],
-    'REASON': ['DebtCon', 'HomeImp', 'Other', 'DebtCon', 'HomeImp', 'DebtCon', 'Other', 'HomeImp', 'DebtCon', 'Other'],
-    'JOB': ['Mgr', 'ProfExe', 'Office', 'Sales', 'Self', 'Mgr', 'Office', 'ProfExe', 'Sales', 'Self'],
-    'YOJ': [5, 10, 2, 7, 15, 8, 3, 12, 6, 18],
-    'DEROG': [0, 1, 0, 0, 2, 0, 0, 1, 0, 0],
-    'DELINQ': [0, 0, 1, 0, 0, 0, 0, 0, 1, 0],
-    'CLAGE': [100, 200, 50, 150, 120, 180, 60, 220, 90, 250],
-    'NINQ': [0, 1, 0, 2, 0, 1, 0, 0, 1, 0],
-    'CLNO': [10, 15, 5, 12, 8, 11, 6, 14, 9, 16],
-    'DEBTINC': [35.0, 40.0, 25.0, 30.0, 45.0, 38.0, 28.0, 42.0, 33.0, 20.0],
-    'BAD': [0, 1, 0, 1, 0, 0, 1, 0, 1, 0] # Dummy target variable
+    'DerogCnt': [1, 0, 2, 0, 1, 0],
+    'CollectCnt': [0, 1, 0, 0, 0, 1],
+    'BanruptcyInd': [0, 1, 0, 0, 0, 1], # Assuming 0 or 1
+    'InqCnt06': [3, 1, 5, 2, 0, 4],
+    'InqTimeLast': [10, 5, 15, 8, 20, 12],
+    'InqFinanceCnt24': [2, 1, 3, 1, 0, 2],
+    'TLTimeFirst': [120, 80, 200, 90, 150, 100],
+    'TLTimeLast': [15, 10, 25, 12, 18, 14],
+    'TLCnt03': [1, 0, 2, 1, 0, 1],
+    'TLCnt12': [3, 2, 5, 3, 1, 4],
+    'TLCnt24': [5, 4, 8, 6, 2, 7],
+    'TLCnt': [10, 8, 15, 12, 5, 13],
+    'TLSum': [50000, 30000, 80000, 45000, 20000, 60000],
+    'TLMaxSum': [15000, 10000, 25000, 12000, 8000, 18000],
+    'TLSatCnt': [8, 6, 12, 9, 4, 10],
+    'TLDel60Cnt': [0, 1, 0, 0, 1, 0],
+    'TLBadCnt24': [0, 1, 0, 0, 1, 0],
+    'TL75UtilCnt': [2, 1, 3, 1, 0, 2],
+    'TL50UtilCnt': [4, 2, 6, 3, 1, 4],
+    'TLBalHCPct': [0.6, 0.8, 0.5, 0.7, 0.9, 0.65],
+    'TLSatPct': [0.8, 0.7, 0.85, 0.75, 0.6, 0.82],
+    'TLDel3060Cnt24': [0, 0, 1, 0, 0, 1],
+    'TLDel90Cnt24': [0, 1, 0, 0, 0, 0],
+    'TLDel60CntAll': [0, 1, 0, 0, 1, 1],
+    'TLOpenPct': [0.5, 0.3, 0.6, 0.4, 0.2, 0.55],
+    'TLBadDerogCnt': [0, 1, 0, 0, 1, 0],
+    'TLOpen24Pct': [0.7, 0.4, 0.8, 0.5, 0.3, 0.75],
+    'TARGET': [0, 1, 0, 0, 1, 1] # Dummy target variable (0: Good, 1: Bad)
 })
 
 # Define preprocessing steps
-# Numerical features: Impute with mean, then scale
 numerical_transformer = Pipeline(steps=[
     ('imputer', SimpleImputer(strategy='mean')), 
     ('scaler', StandardScaler())
 ])
 
-# Categorical features: Impute with 'missing', then one-hot encode
 categorical_transformer = Pipeline(steps=[
     ('imputer', SimpleImputer(strategy='constant', fill_value='missing_category')), 
     ('onehot', OneHotEncoder(handle_unknown='ignore'))
@@ -71,32 +94,27 @@ preprocessor = ColumnTransformer(
 # Create a pipeline: preprocess then apply HistGradientBoostingClassifier
 model_pipeline = Pipeline(steps=[
     ('preprocessor', preprocessor),
-    # CHANGED: Using HistGradientBoostingClassifier
     ('classifier', HistGradientBoostingClassifier(random_state=42)) 
 ])
 
 # "Fit" the pipeline on the dummy data
 try:
-    model_pipeline.fit(dummy_data_for_training[ALL_FEATURES], dummy_data_for_training['BAD'])
-    st.sidebar.success("Simulated ML model (HistGradientBoostingClassifier) and preprocessor initialized.")
+    model_pipeline.fit(dummy_data_for_training[ALL_FEATURES], dummy_data_for_training[TARGET_COLUMN])
+    st.sidebar.success("Simulated ML model (HistGradientBoostingClassifier) and preprocessor initialized for new data.")
 except Exception as e:
     st.sidebar.error(f"Error initializing simulated ML model: {e}")
     st.stop() 
 
 # --- Credit Scoring Function using the ML Model ---
 @st.cache_data 
-def get_credit_score_ml(df_input: pd.DataFrame):
+def get_credit_score_ml(df_input: pd.DataFrame, approval_threshold: int): 
     """
     Applies the simulated ML model to score a DataFrame of loan applications.
     Performs robust NaN handling and type coercion before passing to the ML pipeline.
     """
-    # Create a copy to avoid modifying the original DataFrame passed to the cached function
     df_processed = df_input.copy()
 
-    # --- Robust NaN Handling and Type Coercion BEFORE Pipeline ---
-
-    # 1. Ensure all expected feature columns exist. Add if missing with default values.
-    # This also helps ensure correct column order for the ColumnTransformer.
+    # Ensure all expected feature columns exist. Add if missing with default values.
     for col in ALL_FEATURES:
         if col not in df_processed.columns:
             if col in NUMERICAL_FEATURES:
@@ -104,18 +122,17 @@ def get_credit_score_ml(df_input: pd.DataFrame):
             elif col in CATEGORICAL_FEATURES:
                 df_processed[col] = 'missing_category' 
     
-    # 2. Coerce numerical columns to numeric type, converting any non-numeric values to NaN
+    # Coerce numerical columns to numeric type, converting any non-numeric values to NaN
     for col in NUMERICAL_FEATURES:
         df_processed[col] = pd.to_numeric(df_processed[col], errors='coerce')
         # The SimpleImputer in the pipeline will handle these NaNs.
         # No need for explicit fillna here anymore, as HistGradientBoostingClassifier handles NaNs.
         # However, the numerical_transformer's SimpleImputer will still fill them for consistency.
 
-    # 3. Explicitly fill NaNs in categorical columns and ensure they are string type
+    # Explicitly fill NaNs in categorical columns and ensure they are string type
     for col in CATEGORICAL_FEATURES:
         df_processed[col] = df_processed[col].astype(str).replace('nan', 'missing_category')
         df_processed[col] = df_processed[col].fillna('missing_category') 
-
 
     # Select and reorder columns to match the training order
     df_processed_for_prediction = df_processed[ALL_FEATURES]
@@ -129,13 +146,13 @@ def get_credit_score_ml(df_input: pd.DataFrame):
 
     # Predict probabilities (probability of BAD=1, BAD=0)
     # HistGradientBoostingClassifier.predict_proba returns probabilities for each class
+    # Assuming class 0 (index 0) is "Good" and class 1 (index 1) is "Bad" based on TARGET column
     probabilities = model_pipeline.predict_proba(df_processed_for_prediction)
     
-    # Assuming class 0 is "Good" and class 1 is "Bad"
-    scores = probabilities[:, 0] * 100 # Probability of being a "Good" loan
+    scores = probabilities[:, 0] * 100 # Probability of being a "Good" loan (Class 0)
 
     # Make decisions based on a threshold (can be tuned)
-    decisions = np.where(scores >= 50, "Approved", "Rejected") 
+    decisions = np.where(scores >= approval_threshold, "Approved", "Rejected") 
 
     return pd.DataFrame({'Score': scores, 'Decision': decisions})
 
@@ -221,8 +238,8 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-st.title("Credit Scoring Dashboard with S3 Integration (Powered by Gradient Boosting!)") # Updated Title
-st.subheader("Upload Excel files and analyze loan vulnerability")
+st.title("Credit Risk Dashboard (Powered by Gradient Boosting with Adjustable Threshold!)") # Updated Title
+st.subheader("Upload Credit Data and Analyze Risk") # Updated Subheader
 
 # --- Initialize S3 Client ---
 s3_client = None
@@ -262,10 +279,10 @@ def clear_file_uploader():
     st.session_state['file_uploader_key'] += 1
 
 # --- File Upload Section ---
-st.header("Upload Excel File to S3")
+st.header("Upload Credit Data to S3") # Updated Header
 uploaded_file = st.file_uploader(
-    "Choose an Excel file (.xlsx)",
-    type=["xlsx"],
+    "Choose a CSV file (.csv)", # Changed to CSV
+    type=["csv"], # Changed to CSV
     key=f"file_uploader_{st.session_state['file_uploader_key']}" 
 )
 
@@ -291,14 +308,14 @@ if uploaded_file is not None:
         st.error(f"Error uploading file to S3: {e}")
 
 # --- Dashboard Section for Analysis Trigger (Encapsulated in a Form) ---
-st.header("Analyze Loans from S3")
+st.header("Analyze Credit Data from S3") # Updated Header
 
 s3_files = []
 try:
     if s3_client:
         response = s3_client.list_objects_v2(Bucket=s3_bucket_name, Prefix="uploads/")
         if 'Contents' in response:
-            s3_files = [obj['Key'] for obj in response['Contents'] if obj['Key'].endswith('.xlsx')]
+            s3_files = [obj['Key'] for obj in response['Contents'] if obj['Key'].endswith('.csv')] # Changed to CSV
             s3_files.sort(reverse=True)
 except Exception as e:
     st.warning(f"Could not list files from S3 bucket: {e}. Ensure 'uploads/' prefix exists or bucket is not empty, and permissions are correct.")
@@ -318,13 +335,13 @@ with st.form("analysis_trigger_form"):
                 default_index = 0
 
         selected_s3_file_in_form = st.selectbox(
-            "Choose an Excel file from S3:",
+            "Choose a CSV file from S3:", # Changed to CSV
             options=s3_files,
             index=default_index,
             key="s3_file_selector_form" 
         )
     else:
-        st.info("No Excel files found in the 'uploads/' folder of your S3 bucket. Please upload one above.")
+        st.info("No CSV files found in the 'uploads/' folder of your S3 bucket. Please upload one above.")
 
     # This is the button that submits the form and triggers analysis
     analyze_submitted = st.form_submit_button(f"Analyze Selected File")
@@ -348,13 +365,28 @@ if st.session_state['analyze_triggered'] and st.session_state['selected_file_for
     try:
         with st.spinner(f"Downloading and analyzing '{file_to_analyze}' from S3..."):
             obj = s3_client.get_object(Bucket=s3_bucket_name, Key=file_to_analyze)
-            excel_data = obj['Body'].read()
+            # CHANGED: Read as CSV
+            df = pd.read_csv(io.BytesIO(obj['Body'].read())) 
+            st.write(f"DEBUG: Successfully read {len(df)} rows from CSV file.")
+            st.write("DEBUG: Columns in loaded CSV file:", df.columns.tolist()) 
 
-            df = pd.read_excel(io.BytesIO(excel_data))
-            st.write(f"DEBUG: Successfully read {len(df)} rows from Excel file.")
-            st.write("DEBUG: Columns in loaded Excel file:", df.columns.tolist()) 
+            # NEW: Drop 'ID' column if it exists, as it's not a feature
+            if 'ID' in df.columns:
+                df = df.drop(columns=['ID'])
+                st.write("DEBUG: Dropped 'ID' column.")
 
-            results_df = get_credit_score_ml(df.copy()) 
+            # NEW: Ensure TARGET_COLUMN is integer type for classification
+            if TARGET_COLUMN in df.columns:
+                df[TARGET_COLUMN] = pd.to_numeric(df[TARGET_COLUMN], errors='coerce').fillna(0).astype(int)
+                st.write(f"DEBUG: '{TARGET_COLUMN}' column processed to integer type.")
+            else:
+                st.warning(f"'{TARGET_COLUMN}' column not found in the uploaded data. Please ensure your CSV has a '{TARGET_COLUMN}' column for scoring.")
+                st.session_state['scored_data'] = pd.DataFrame()
+                st.session_state['analyze_triggered'] = False
+                st.session_state['selected_file_for_analysis'] = None
+                st.stop() # Stop execution if target column is missing
+
+            results_df = get_credit_score_ml(df.copy(), st.session_state['approval_threshold']) 
             df_scored = pd.concat([df, results_df], axis=1)
             st.write(f"DEBUG: Scored data has {len(df_scored)} rows.")
 
@@ -365,7 +397,7 @@ if st.session_state['analyze_triggered'] and st.session_state['selected_file_for
             st.write("DEBUG: Analysis complete. Trigger and selected file reset.")
 
     except Exception as e:
-        st.error(f"Error analyzing file from S3: {e}. Please check file format and column names in your Excel file.")
+        st.error(f"Error analyzing file from S3: {e}. Please check file format and column names in your CSV file.")
         st.write("DEBUG: An error occurred during analysis:", e)
         st.session_state['scored_data'] = pd.DataFrame()
         st.session_state['analyze_triggered'] = False 
@@ -386,77 +418,93 @@ if 'scored_data' in st.session_state and not st.session_state['scored_data'].emp
     df_display = st.session_state['scored_data']
     st.write("DEBUG: Displaying scored data.")
 
-    st.subheader("Full Loan Data with Scores and Decisions")
+    st.subheader("Full Credit Data with Scores and Decisions") # Updated Subheader
     st.dataframe(df_display)
 
-    # NEW: Dashboard Visualizations Section
-    st.header("Loan Performance Dashboard")
-    st.markdown("Dive into the top-performing and most vulnerable loans with interactive charts.")
+    # Adjustable Approval Threshold Slider
+    st.markdown("---")
+    st.subheader("Adjust Risk Approval Threshold") # Updated Subheader
+    st.session_state['approval_threshold'] = st.slider(
+        "Set Minimum Score for Approval:",
+        min_value=0,
+        max_value=100,
+        value=st.session_state['approval_threshold'], 
+        step=1,
+        help="Loans/applicants with a score equal to or above this value will be 'Approved'. Adjust to see impact on decisions.",
+        key="approval_threshold_slider"
+    )
+    st.info(f"Current Approval Threshold: **{st.session_state['approval_threshold']}**")
+    st.warning("Changing the threshold will re-evaluate all decisions. Click 'Analyze Selected File' again to apply.")
 
-    # Create two columns for side-by-side charts
+    # --- Dashboard Visualizations Section ---
+    st.header("Credit Performance Dashboard") # Updated Header
+    st.markdown("Dive into the top-performing and most vulnerable credit applications with interactive charts.") # Updated text
+
     col1, col2 = st.columns(2)
 
     with col1:
-        st.subheader("Top 10 Approved Loans (Highest Scores)")
-        # Sort by Score descending and get the top 10
-        top_10_loans = df_display.sort_values(by='Score', ascending=False).head(10)
+        st.subheader("Top 10 Approved Applicants (Highest Scores)") # Updated Subheader
+        top_10_approved_loans = df_display[df_display['Decision'] == 'Approved'].sort_values(by='Score', ascending=False).head(10)
         
-        # Create a Plotly bar chart
-        fig_top10 = px.bar(
-            top_10_loans,
-            x='LOAN',
-            y='Score',
-            color='Decision', # Color bars by approval/rejection
-            color_discrete_map={'Approved': '#4CAF50', 'Rejected': '#f44336'}, # Custom colors
-            title='Top 10 Loans by Credit Score',
-            labels={'LOAN': 'Loan ID', 'Score': 'Credit Score'},
-            hover_data=['REASON', 'JOB', 'DEBTINC'] # Show additional info on hover
-        )
-        fig_top10.update_layout(xaxis_tickangle=-45) # Angle x-axis labels for readability
-        st.plotly_chart(fig_top10, use_container_width=True)
+        if not top_10_approved_loans.empty:
+            fig_top10 = px.bar(
+                top_10_approved_loans,
+                x=top_10_approved_loans.index, # Use DataFrame index as x-axis for unique ID representation
+                y='Score',
+                color_discrete_sequence=['#4CAF50'], 
+                title='Top 10 Approved Applicants by Score', # Updated Title
+                labels={top_10_approved_loans.index.name: 'Applicant ID', 'Score': 'Credit Score'}, # Updated Label
+                hover_data=NUMERICAL_FEATURES + CATEGORICAL_FEATURES + ['Decision'] # Show all relevant features on hover
+            )
+            fig_top10.update_layout(xaxis_tickangle=-45) 
+            st.plotly_chart(fig_top10, use_container_width=True)
+        else:
+            st.info("No approved applicants to display in the top 10 chart based on current threshold.")
+
 
     with col2:
-        st.subheader("Worst 10 Vulnerable Loans (Lowest Scores)")
-        # Sort by Score ascending and get the top 10 (which are the worst)
-        worst_10_loans = df_display.sort_values(by='Score', ascending=True).head(10)
+        st.subheader("Worst 10 Rejected Applicants (Lowest Scores)") # Updated Subheader
+        worst_10_rejected_loans = df_display[df_display['Decision'] == 'Rejected'].sort_values(by='Score', ascending=True).head(10)
         
-        # Create a Plotly bar chart
-        fig_worst10 = px.bar(
-            worst_10_loans,
-            x='LOAN',
-            y='Score',
-            color='Decision', # Color bars by approval/rejection
-            color_discrete_map={'Approved': '#4CAF50', 'Rejected': '#f44336'}, # Custom colors
-            title='Worst 10 Loans by Credit Score',
-            labels={'LOAN': 'Loan ID', 'Score': 'Credit Score'},
-            hover_data=['REASON', 'JOB', 'DEBTINC'] # Show additional info on hover
-        )
-        fig_worst10.update_layout(xaxis_tickangle=-45) # Angle x-axis labels for readability
-        st.plotly_chart(fig_worst10, use_container_width=True)
+        if not worst_10_rejected_loans.empty:
+            fig_worst10 = px.bar(
+                worst_10_rejected_loans,
+                x=worst_10_rejected_loans.index, # Use DataFrame index as x-axis for unique ID representation
+                y='Score',
+                color_discrete_sequence=['#f44336'], 
+                title='Worst 10 Rejected Applicants by Score', # Updated Title
+                labels={worst_10_rejected_loans.index.name: 'Applicant ID', 'Score': 'Credit Score'}, # Updated Label
+                hover_data=NUMERICAL_FEATURES + CATEGORICAL_FEATURES + ['Decision']
+            )
+            fig_worst10.update_layout(xaxis_tickangle=-45) 
+            st.plotly_chart(fig_worst10, use_container_width=True)
+        else:
+            st.info("No rejected applicants to display in the worst 10 chart based on current threshold.")
 
-    # NEW: Overall Score Distribution Histogram
+    # Overall Score Distribution Histogram
     st.subheader("Overall Credit Score Distribution")
     fig_hist = px.histogram(
         df_display,
         x='Score',
-        nbins=20, # Number of bins for the histogram
+        nbins=20, 
         title='Distribution of Credit Scores',
         labels={'Score': 'Credit Score'},
-        color='Decision', # Color by decision
+        color='Decision', 
         color_discrete_map={'Approved': '#4CAF50', 'Rejected': '#f44336'},
-        marginal='box' # Add a box plot to the margin for more insights
+        marginal='box' 
     )
+    fig_hist.add_vline(x=st.session_state['approval_threshold'], line_width=2, line_dash="dash", line_color="blue", annotation_text=f"Threshold: {st.session_state['approval_threshold']}", annotation_position="top right")
     st.plotly_chart(fig_hist, use_container_width=True)
 
-
-    st.subheader("Vulnerable Loans (Rejected)")
+    # Display the full vulnerable loans table as before
+    st.subheader("Rejected Applicants Summary") # Updated Subheader
     vulnerable_loans = df_display[df_display['Decision'] == 'Rejected']
 
     if not vulnerable_loans.empty:
         st.dataframe(vulnerable_loans)
-        st.info(f"Found {len(vulnerable_loans)} vulnerable loans.")
+        st.info(f"Found {len(vulnerable_loans)} rejected applicants.") # Updated text
     else:
-        st.success("No vulnerable loans found in this dataset!")
+        st.success("No rejected applicants found in this dataset based on current threshold!") # Updated text
 else:
     st.write("DEBUG: No scored data found in session state or data is empty. Dashboard not displayed.")
 
@@ -466,19 +514,19 @@ st.subheader("How this app would integrate with AWS and Langchain (Recap):")
 
 st.markdown(
     """
-    This Streamlit app now demonstrates uploading and analyzing Excel files from AWS S3.
+    This Streamlit app now demonstrates uploading and analyzing **sophisticated credit data** from AWS S3, leveraging a powerful Gradient Boosting Machine learning model.
 
     ### ☁️ AWS Cloud Integration:
-    * **Data Storage (S3):** Excel files are now stored in AWS S3, providing durable and scalable storage.
+    * **Data Storage (S3):** Data files are stored in AWS S3, providing durable and scalable storage.
     * **Machine Learning Model Hosting (SageMaker):** In a real scenario, the `get_credit_score_ml` function would call a sophisticated ML model deployed on AWS SageMaker for more accurate and robust predictions. This separates the heavy computation from the Streamlit app.
     * **Serverless Functions (Lambda):** Could be used for automated processing of new files uploaded to S3 (e.g., triggering the scoring process automatically).
-    * **Authentication & Authorization (Cognito):** For secure user access to the app and S3, ensuring only authorized users can upload or view sensitive loan data.
+    * **Authentication & Authorization (Cognito):** For secure user access to the app and S3, ensuring only authorized users can upload or view sensitive data.
     * **Logging & Monitoring (CloudWatch):** To track app performance, S3 interactions, and potential errors, providing insights for operational management.
 
     ### 🔗 Langchain Integration:
     Langchain is primarily used for building applications with Large Language Models (LLMs). It could enhance this application in several ways:
-    * **Explainable AI (XAI):** After identifying vulnerable loans, Langchain could prompt an LLM to generate more detailed, human-readable explanations for *why* specific loans were flagged as vulnerable, based on their input features.
-    * **Conversational Interface:** Users could interact with the dashboard using natural language queries (e.g., "Show me all rejected loans with a debt-to-income ratio above 40%"), with Langchain interpreting the query and dynamically filtering the DataFrame.
-    * **Automated Reporting:** Langchain could help generate summary reports or alerts for vulnerable loans, potentially integrating with email services to notify relevant stakeholders.
+    * **Explainable AI (XAI):** After identifying rejected applicants, Langchain could prompt an LLM to generate more detailed, human-readable explanations for *why* specific applicants were flagged as high-risk, based on their input features.
+    * **Conversational Interface:** Users could interact with the dashboard using natural language queries (e.g., "Show me all applicants with a Derogatory Count greater than 1"), with Langchain interpreting the query and dynamically filtering the DataFrame.
+    * **Automated Reporting:** Langchain could help generate summary reports or alerts for high-risk applications, potentially integrating with email services to notify relevant stakeholders.
     """
 )
