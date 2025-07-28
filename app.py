@@ -26,7 +26,7 @@ st.session_state.setdefault('selected_file_for_analysis', None)
 st.session_state.setdefault('file_uploader_key', 0) 
 st.session_state.setdefault('approval_threshold', 50) # Default approval threshold
 st.session_state.setdefault('uploaded_df_columns', []) # To store columns of the last uploaded file
-st.session_state.setdefault('selected_target_column', 'Default') # Default target column name is 'Default'
+st.session_state.setdefault('selected_target_column', 'default') # CHANGED: Default target column name is 'default' (lowercase)
 
 # --- Define Feature Columns for the 'credit.csv' dataset ---
 NUMERICAL_FEATURES = [
@@ -38,7 +38,8 @@ NUMERICAL_FEATURES = [
 ]
 CATEGORICAL_FEATURES = [] # No explicit categorical features based on previous analysis
 
-TARGET_COLUMN = 'Default' # The column to predict, as confirmed by user
+# CHANGED: Target column name is now 'default' (lowercase)
+TARGET_COLUMN = 'default' 
 DUMMY_TARGET_COLUMN_NAME = TARGET_COLUMN 
 
 # --- Simulate Model Training and Preprocessing for the NEW dataset ---
@@ -175,7 +176,8 @@ def get_credit_score_ml(df_input: pd.DataFrame, approval_threshold: int, actual_
     # Coerce numerical columns to numeric type, converting any non-numeric values to NaN
     for col in NUMERICAL_FEATURES:
         if col in df_processed.columns: # Only process if column exists after previous checks
-            df_processed[col] = pd.to_numeric(df_processed[col], errors='coerce')
+            df_processed[col] = pd.to_numeric(df[col], errors='coerce') # Use original df for to_numeric
+            df_processed[col] = df_processed[col].fillna(df_processed[col].mean() if not df_processed[col].empty else 0.0) # Fill NaNs after conversion
 
     # Explicitly fill NaNs in categorical columns and ensure they are string type
     for col in CATEGORICAL_FEATURES:
@@ -398,6 +400,7 @@ with st.form("analysis_trigger_form"):
             st.session_state['uploaded_df_columns'] = temp_df.columns.tolist()
             
             default_target_idx = 0
+            # CHANGED: Check for 'default' (lowercase)
             if TARGET_COLUMN in st.session_state['uploaded_df_columns']:
                 default_target_idx = st.session_state['uploaded_df_columns'].index(TARGET_COLUMN)
             elif len(st.session_state['uploaded_df_columns']) > 0:
@@ -405,7 +408,7 @@ with st.form("analysis_trigger_form"):
                 default_target_idx = 0 
             
             st.session_state['selected_target_column'] = st.selectbox(
-                "Select the Target Column (e.g., 'Default', 'TARGET'):",
+                "Select the Target Column (e.g., 'default', 'TARGET'):", # CHANGED: Example to 'default'
                 options=st.session_state['uploaded_df_columns'],
                 index=default_target_idx,
                 key="target_column_selector"
@@ -414,7 +417,6 @@ with st.form("analysis_trigger_form"):
             st.error(f"Error reading selected file to get columns for target selector: {e}")
             st.session_state['uploaded_df_columns'] = [] 
             st.session_state['selected_target_column'] = '' 
-            # Do not stop here, allow user to try analyze, which will catch the error later
     else:
         st.session_state['uploaded_df_columns'] = [] # Clear columns if no file selected
         st.session_state['selected_target_column'] = '' # Clear selected target
@@ -453,20 +455,16 @@ if st.session_state['analyze_triggered'] and st.session_state['selected_file_for
             st.write(f"DEBUG: Successfully read {len(df)} rows from CSV file.")
             st.write("DEBUG: Columns in loaded CSV file:", df.columns.tolist()) 
 
-            # REMOVED: The line that was dropping the 'ID' column
-            # if 'ID' in df.columns:
-            #     df = df.drop(columns=['ID'])
-            #     st.write("DEBUG: Dropped 'ID' column.")
-
             # Ensure 'ID' column is string type for plotting if it exists
-            if 'ID' in df.columns:
-                df['ID'] = df['ID'].astype(str)
-                st.write("DEBUG: 'ID' column processed to string type.")
             # If 'ID' column is not present, create a unique identifier from index for plotting
-            else:
+            if 'ID' not in df.columns:
                 df['ID'] = df.index.astype(str) + '_idx'
                 st.write("DEBUG: 'ID' column not found, created unique IDs from index.")
+            else:
+                df['ID'] = df['ID'].astype(str)
+                st.write("DEBUG: 'ID' column processed to string type.")
 
+            st.write("DEBUG: Columns in df after ID processing:", df.columns.tolist()) # New debug
 
             # Ensure the selected target column is present and is integer type for classification
             if actual_target_col_name in df.columns:
@@ -481,8 +479,19 @@ if st.session_state['analyze_triggered'] and st.session_state['selected_file_for
 
             # Pass the actual_target_col_name to the scoring function
             results_df = get_credit_score_ml(df.copy(), st.session_state['approval_threshold'], actual_target_col_name) 
-            # Since df already has 'ID' and results_df is just Score/Decision, concat will work fine
+            
+            # Ensure 'ID' is the first column in df before concatenating for consistent display
+            if 'ID' in df.columns:
+                id_col = df['ID']
+                # Temporarily drop 'ID' if it's already in df to re-insert at position 0
+                df_temp = df.drop(columns=['ID'])
+                df_temp.insert(0, 'ID', id_col)
+                df = df_temp # Update df to be the one with 'ID' at the front
+                st.write("DEBUG: 'ID' column moved to front of DataFrame.")
+
+
             df_scored = pd.concat([df, results_df], axis=1)
+            st.write(f"DEBUG: Columns in df_scored before dashboard display:", df_scored.columns.tolist()) # New debug
             st.write(f"DEBUG: Scored data has {len(df_scored)} rows.")
 
             st.session_state['scored_data'] = df_scored
@@ -512,6 +521,7 @@ st.markdown("### Dashboard Display")
 if 'scored_data' in st.session_state and not st.session_state['scored_data'].empty:
     df_display = st.session_state['scored_data']
     st.write("DEBUG: Displaying scored data.")
+    st.write("DEBUG: Columns in df_display at dashboard start:", df_display.columns.tolist()) # New debug
 
     st.subheader("Full Credit Data with Scores and Decisions") 
     st.dataframe(df_display)
@@ -542,6 +552,8 @@ if 'scored_data' in st.session_state and not st.session_state['scored_data'].emp
         # Sort by Score descending and get the top 10
         top_10_approved_loans = df_display[df_display['Decision'] == 'Approved'].sort_values(by='Score', ascending=False).head(10)
         
+        st.write(f"DEBUG: Columns in top_10_approved_loans: {top_10_approved_loans.columns.tolist()}") # New debug
+
         if not top_10_approved_loans.empty:
             # Get ordered IDs for Plotly category_orders
             ordered_top_ids = top_10_approved_loans['ID'].tolist()
@@ -570,6 +582,8 @@ if 'scored_data' in st.session_state and not st.session_state['scored_data'].emp
         # Sort by Score ascending and get the top 10 (which are the worst)
         worst_10_rejected_loans = df_display[df_display['Decision'] == 'Rejected'].sort_values(by='Score', ascending=True).head(10)
         
+        st.write(f"DEBUG: Columns in worst_10_rejected_loans: {worst_10_rejected_loans.columns.tolist()}") # New debug
+
         if not worst_10_rejected_loans.empty:
             # Get ordered IDs for Plotly category_orders
             ordered_worst_ids = worst_10_rejected_loans['ID'].tolist()
