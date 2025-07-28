@@ -155,7 +155,16 @@ try:
     aws_access_key = st.secrets["aws"]["access_key_id"]
     aws_secret_key = st.secrets["aws"]["secret_access_key"]
     s3_bucket_name = st.secrets["aws"]["s3_bucket_name"]
-    aws_region_name = st.secrets["aws"]["region_name"] # Retrieve region from secrets
+    # Accessing region_name. If it's a top-level secret, use st.secrets["region_name"]
+    # If it's nested under [aws], use st.secrets["aws"]["region_name"]
+    # Based on your last feedback, it worked without the dot, implying it might be top-level.
+    # Let's try to get it from 'aws' first, then fallback to top-level if needed for robustness.
+    try:
+        aws_region_name = st.secrets["aws"]["region_name"]
+    except KeyError:
+        st.sidebar.warning("`aws.region_name` not found. Trying top-level `region_name`.")
+        aws_region_name = st.secrets["region_name"] # Fallback to top-level if not nested
+
 
     # Initialize the boto3 S3 client
     s3_client = boto3.client(
@@ -237,49 +246,52 @@ if s3_files:
 else:
     st.info("No Excel files found in the 'uploads/' folder of your S3 bucket. Please upload one above.")
 
-# --- DEBUGGING: Confirm button rendering ---
-st.write("---") # Visual separator
-st.markdown("### Debugging: Analyze Button Section")
+# --- Analyze Button and Logic (Encapsulated in a Form) ---
+st.markdown("### Loan Analysis")
 
 if selected_s3_file:
-    st.write(f"Selected file for analysis: `{selected_s3_file}`")
-    # This is the Analyze button that triggers the processing
-    if st.button(f"Analyze '{selected_s3_file}'", key="analyze_button"): # Added a key for stability
-        st.write("DEBUG: Analyze button was clicked. Starting analysis...")
-        try:
-            with st.spinner(f"Downloading and analyzing '{selected_s3_file}' from S3..."):
-                # Download file content from S3
-                obj = s3_client.get_object(Bucket=s3_bucket_name, Key=selected_s3_file)
-                excel_data = obj['Body'].read()
+    # Use a form to encapsulate the analysis button and ensure its state is captured reliably
+    with st.form("analyze_form"):
+        st.write(f"Click the button below to analyze the selected file: `{selected_s3_file}`")
+        analyze_submitted = st.form_submit_button(f"Analyze '{selected_s3_file}'")
 
-                # Read Excel data into a pandas DataFrame using io.BytesIO
-                df = pd.read_excel(io.BytesIO(excel_data))
-                st.write(f"DEBUG: Successfully read {len(df)} rows from Excel file.")
-                st.write("DEBUG: Columns in loaded Excel file:", df.columns.tolist())
+        if analyze_submitted:
+            st.write("DEBUG: Analyze form was submitted. Starting analysis...")
+            try:
+                with st.spinner(f"Downloading and analyzing '{selected_s3_file}' from S3..."):
+                    # Download file content from S3
+                    obj = s3_client.get_object(Bucket=s3_bucket_name, Key=selected_s3_file)
+                    excel_data = obj['Body'].read()
 
-                # Apply credit scoring to each row of the DataFrame
-                results = df.apply(get_credit_score, axis=1)
-                # Concatenate the original DataFrame with the new 'Score' and 'Decision' columns
-                df_scored = pd.concat([df, results], axis=1)
-                st.write(f"DEBUG: Scored data has {len(df_scored)} rows.")
+                    # Read Excel data into a pandas DataFrame using io.BytesIO
+                    df = pd.read_excel(io.BytesIO(excel_data))
+                    st.write(f"DEBUG: Successfully read {len(df)} rows from Excel file.")
+                    st.write("DEBUG: Columns in loaded Excel file:", df.columns.tolist())
 
-                # Store the scored data in Streamlit's session state for persistence across reruns
-                st.session_state['scored_data'] = df_scored
+                    # Apply credit scoring to each row of the DataFrame
+                    results = df.apply(get_credit_score, axis=1)
+                    df_scored = pd.concat([df, results], axis=1)
+                    st.write(f"DEBUG: Scored data has {len(df_scored)} rows.")
 
-                st.success(f"Analysis complete for '{selected_s3_file}'.")
+                    # Store the scored data in Streamlit's session state for persistence across reruns
+                    st.session_state['scored_data'] = df_scored
+                    st.success(f"Analysis complete for '{selected_s3_file}'.")
 
-        except Exception as e:
-            st.error(f"Error analyzing file from S3: {e}. Please check file format and column names.")
-            st.write("DEBUG: An error occurred during analysis:", e)
-            st.session_state['scored_data'] = pd.DataFrame() # Clear data on error
+            except Exception as e:
+                st.error(f"Error analyzing file from S3: {e}. Please check file format and column names in your Excel file.")
+                st.write("DEBUG: An error occurred during analysis:", e)
+                st.session_state['scored_data'] = pd.DataFrame() # Clear data on error
+        else:
+            st.write("DEBUG: Analyze form not yet submitted.")
 else:
-    st.info("Please select a file from the dropdown to enable the Analyze button.")
+    st.info("Please select an Excel file from the dropdown to enable analysis.")
+
 
 # --- Display Dashboard Results ---
-st.markdown("### Debugging: Dashboard Display Section")
+st.markdown("### Dashboard Display") # Changed from Debugging: Dashboard Display Section
 if 'scored_data' in st.session_state and not st.session_state['scored_data'].empty:
     df_display = st.session_state['scored_data']
-    st.write("DEBUG: Displaying scored data.")
+    st.write("DEBUG: Displaying scored data.") # Keep this debug
 
     st.subheader("Full Loan Data with Scores and Decisions")
     st.dataframe(df_display) # Display the full DataFrame
