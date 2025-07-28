@@ -1,62 +1,57 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import os # To demonstrate checking environment variables if needed
+import boto3
+import io
+import datetime # For unique file naming
+import os
 
 # --- Dummy Credit Scoring Model ---
-# In a real-world scenario, this would be a trained machine learning model (e.g., Logistic Regression, Random Forest, XGBoost)
-# loaded from a file (e.g., .pkl, .joblib) or served via an API (e.g., AWS SageMaker Endpoint).
-def get_credit_score(data):
+# This function remains the same, but will now operate on DataFrame rows.
+def get_credit_score(data_row):
     """
     A simple dummy credit scoring function.
-    In a real application, this would be a sophisticated ML model.
-    It takes a dictionary of input features and returns a score and a decision.
+    It takes a dictionary (representing a row of data) and returns a score and a decision.
     """
-    # Convert categorical inputs to numerical for this dummy model
     reason_map = {'DebtCon': 0.3, 'HomeImp': 0.2, 'Other': 0.1}
     job_map = {'Mgr': 0.2, 'Office': 0.1, 'Other': 0.05, 'ProfExe': 0.15, 'Sales': 0.1, 'Self': 0.25}
 
-    # Assign default values for missing numerical inputs to avoid errors in dummy calculation
-    loan = data.get('LOAN', 0)
-    mortdue = data.get('MORTDUE', 0)
-    value = data.get('VALUE', 0)
-    yojs = data.get('YOJ', 0)
-    derog = data.get('DEROG', 0)
-    delinq = data.get('DELINQ', 0)
-    clage = data.get('CLAGE', 0)
-    ninq = data.get('NINQ', 0)
-    clno = data.get('CLNO', 0)
-    debtinc = data.get('DEBTINC', 0)
-    bad = data.get('BAD', 0) # This is usually the target variable, not an input for scoring
+    # Use .get() with a default value to handle potential missing columns in uploaded data
+    loan = data_row.get('LOAN', 0)
+    mortdue = data_row.get('MORTDUE', 0)
+    value = data_row.get('VALUE', 0)
+    yojs = data_row.get('YOJ', 0)
+    derog = data_row.get('DEROG', 0)
+    delinq = data_row.get('DELINQ', 0)
+    clage = data_row.get('CLAGE', 0)
+    ninq = data_row.get('NINQ', 0)
+    clno = data_row.get('CLNO', 0)
+    debtinc = data_row.get('DEBTINC', 0)
 
-    reason_score = reason_map.get(data.get('REASON', 'Other'), 0.1)
-    job_score = job_map.get(data.get('JOB', 'Other'), 0.05)
+    reason_score = reason_map.get(data_row.get('REASON', 'Other'), 0.1)
+    job_score = job_map.get(data_row.get('JOB', 'Other'), 0.05)
 
-    # Simple heuristic for a dummy score (higher is better)
-    # This is highly simplified and for demonstration only.
     score = (
-        (loan / 10000) * 5 + # Larger loans might imply higher trust or risk depending on context
-        (value / 100000) * 10 - # Higher value of property is good
-        (mortdue / 100000) * 5 + # Higher mortgage due is bad
-        yojs * 0.5 - # Years on job, more is better
-        derog * 20 - # Derogatory reports, more is bad
-        delinq * 15 - # Delinquent lines, more is bad
-        (clage / 100) * 2 + # Age of oldest credit line, more is better
-        ninq * 10 - # Number of recent credit inquiries, more is bad
-        clno * 1 + # Number of credit lines, more is generally good
-        debtinc * 30 + # Debt-to-income ratio, higher is bad
+        (loan / 10000) * 5 +
+        (value / 100000) * 10 -
+        (mortdue / 100000) * 5 +
+        yojs * 0.5 -
+        derog * 20 -
+        delinq * 15 -
+        (clage / 100) * 2 +
+        ninq * 10 -
+        clno * 1 +
+        debtinc * 30 +
         reason_score * 50 +
         job_score * 50
     )
 
-    # Normalize score to a 0-100 range (example scaling)
-    score = max(0, min(100, score)) # Clamp between 0 and 100
-
+    score = max(0, min(100, score))
     decision = "Approved" if score >= 60 else "Rejected"
-    return score, decision
+    return pd.Series({'Score': score, 'Decision': decision})
 
-# --- Streamlit UI ---
-st.set_page_config(page_title="Dynamic Credit Scoring", layout="centered")
+# --- Streamlit UI Setup ---
+st.set_page_config(page_title="Dynamic Credit Scoring Dashboard", layout="wide")
 
 st.markdown(
     """
@@ -135,138 +130,150 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-st.title("Dynamic Credit Scoring Application")
-st.subheader("Enter applicant details to get a credit score")
+st.title("Credit Scoring Dashboard with S3 Integration")
+st.subheader("Upload Excel files and analyze loan vulnerability")
 
-# --- Accessing Secrets ---
-st.sidebar.header("Application Secrets (for demonstration)")
+# --- Initialize S3 Client ---
+s3_client = None
+s3_bucket_name = None
+
 try:
-    # CORRECTED ACCESS FOR NESTED AWS KEYS
     aws_access_key = st.secrets["aws"]["access_key_id"]
-    # Assuming aws_secret_access_key is also under the [aws] section
     aws_secret_key = st.secrets["aws"]["secret_access_key"]
-    
-    # Example for a top-level secret (if you had one)
-    openai_key = st.secrets.get("openai_api_key", "NOT_SET") # Use .get() for optional secrets
-    db_url = st.secrets.get("database_url", "NOT_SET")
-    
-    # Example for another nested section
-    section_key = st.secrets.get("some_section", {}).get("key_in_section", "NOT_SET")
+    s3_bucket_name = st.secrets["aws"]["s3_bucket_name"]
 
+    s3_client = boto3.client(
+        's3',
+        aws_access_key_id=aws_access_key,
+        aws_secret_access_key=aws_secret_key
+    )
+    st.sidebar.success("AWS S3 client initialized!")
 
-    st.sidebar.write(f"AWS Access Key ID: `{aws_access_key[:4]}...`") # Show only first few chars
+    # Display secrets (partially masked) in sidebar for verification
+    st.sidebar.header("Application Secrets")
+    st.sidebar.write(f"AWS Access Key ID: `{aws_access_key[:4]}...`")
     st.sidebar.write(f"AWS Secret Access Key: `{aws_secret_key[:4]}...`")
-    st.sidebar.write(f"OpenAI API Key: `{openai_key[:4]}...`")
-    st.sidebar.write(f"Database URL: `{db_url[:10]}...`")
-    st.sidebar.write(f"Key in section: `{section_key}`")
-
-    # In a real app, you would use these secrets to configure your clients:
-    # import boto3
-    # s3_client = boto3.client(
-    #     's3',
-    #     aws_access_key_id=aws_access_key,
-    #     aws_secret_access_key=aws_secret_key
-    # )
-    # os.environ["OPENAI_API_KEY"] = openai_key # For Langchain/OpenAI
-    # from langchain.llms import OpenAI
-    # llm = OpenAI()
+    st.sidebar.write(f"S3 Bucket Name: `{s3_bucket_name}`")
 
 except KeyError as e:
-    st.sidebar.warning(f"Secret key not found: {e}. Please ensure your `.streamlit/secrets.toml` is configured correctly or secrets are set in Streamlit Cloud.")
+    st.sidebar.error(f"Secret key not found: {e}. Please ensure your `.streamlit/secrets.toml` is configured correctly or secrets are set in Streamlit Cloud.")
+    st.stop() # Stop execution if essential secrets are missing
 except Exception as e:
-    st.sidebar.error(f"An error occurred while loading secrets: {e}")
+    st.sidebar.error(f"An error occurred while initializing S3 client: {e}")
+    st.stop()
+
+# --- File Upload Section ---
+st.header("Upload Excel File to S3")
+uploaded_file = st.file_uploader("Choose an Excel file (.xlsx)", type=["xlsx"])
+
+if uploaded_file is not None:
+    file_name = uploaded_file.name
+    # Create a unique file name in S3 to avoid overwrites
+    timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+    s3_file_key = f"uploads/{timestamp}_{file_name}"
+
+    try:
+        # Upload the file to S3
+        with st.spinner(f"Uploading {file_name} to S3..."):
+            s3_client.upload_fileobj(uploaded_file, s3_bucket_name, s3_file_key)
+        st.success(f"File '{file_name}' uploaded successfully to S3 as '{s3_file_key}'!")
+        st.session_state['last_uploaded_s3_key'] = s3_file_key # Store for later retrieval
+    except Exception as e:
+        st.error(f"Error uploading file to S3: {e}")
+
+# --- Dashboard Section ---
+st.header("Analyze Loans from S3")
+
+# Option to select a file from S3 (or use the last uploaded one)
+s3_files = []
+try:
+    if s3_client:
+        response = s3_client.list_objects_v2(Bucket=s3_bucket_name, Prefix="uploads/")
+        if 'Contents' in response:
+            s3_files = [obj['Key'] for obj in response['Contents']]
+            s3_files.sort(reverse=True) # Show most recent first
+except Exception as e:
+    st.warning(f"Could not list files from S3 bucket: {e}. Ensure 'uploads/' prefix exists or bucket is not empty.")
+    s3_files = [] # Reset to empty list if error
+
+selected_s3_file = None
+if s3_files:
+    # Pre-select the last uploaded file if available
+    default_index = 0
+    if 'last_uploaded_s3_key' in st.session_state and st.session_state['last_uploaded_s3_key'] in s3_files:
+        default_index = s3_files.index(st.session_state['last_uploaded_s3_key'])
+
+    selected_s3_file = st.selectbox(
+        "Select an Excel file from S3 to analyze:",
+        options=s3_files,
+        index=default_index
+    )
+else:
+    st.info("No Excel files found in the 'uploads/' folder of your S3 bucket. Please upload one above.")
 
 
-# Input fields for the variables
-with st.form("credit_form"):
-    st.write("Please fill in the applicant's details:")
+if selected_s3_file and st.button(f"Analyze '{selected_s3_file}'"):
+    try:
+        with st.spinner(f"Downloading and analyzing '{selected_s3_file}' from S3..."):
+            # Download file from S3
+            obj = s3_client.get_object(Bucket=s3_bucket_name, Key=selected_s3_file)
+            excel_data = obj['Body'].read()
 
-    col1, col2 = st.columns(2)
-    with col1:
-        loan = st.number_input("LOAN (Amount of the loan request)", min_value=0, value=10000, step=1000)
-        mortdue = st.number_input("MORTDUE (Amount due on existing mortgage)", min_value=0, value=0, step=1000)
-        value = st.number_input("VALUE (Value of current property)", min_value=0, value=50000, step=1000)
-        reason = st.selectbox("REASON (DebtCon: Debt Consolidation, HomeImp: Home Improvement)", ["DebtCon", "HomeImp", "Other"])
-        job = st.selectbox("JOB (Occupational category)", ["Mgr", "Office", "Other", "ProfExe", "Sales", "Self"])
+            # Read Excel data into pandas DataFrame
+            df = pd.read_excel(io.BytesIO(excel_data))
 
-    with col2:
-        yojs = st.number_input("YOJ (Years at present job)", min_value=0, value=5, step=1)
-        derog = st.number_input("DEROG (Number of major derogatory reports)", min_value=0, value=0, step=1)
-        delinq = st.number_input("DELINQ (Number of delinquent credit lines)", min_value=0, value=0, step=1)
-        clage = st.number_input("CLAGE (Age of oldest credit line in months)", min_value=0, value=100, step=10)
-        ninq = st.number_input("NINQ (Number of recent credit inquiries)", min_value=0, value=0, step=1)
-        clno = st.number_input("CLNO (Number of credit lines)", min_value=0, value=10, step=1)
-        debtinc = st.number_input("DEBTINC (Debt-to-income ratio)", min_value=0.0, max_value=100.0, value=35.0, step=0.1)
+            # Apply credit scoring to each row
+            # Use .apply() with axis=1 to pass each row as a dictionary-like object
+            results = df.apply(get_credit_score, axis=1)
+            df_scored = pd.concat([df, results], axis=1)
 
-    # Every form must have a submit button.
-    submitted = st.form_submit_button("Get Credit Score")
+            st.session_state['scored_data'] = df_scored # Store for filtering
 
-    if submitted:
-        input_data = {
-            'LOAN': loan,
-            'MORTDUE': mortdue,
-            'VALUE': value,
-            'REASON': reason,
-            'JOB': job,
-            'YOJ': yojs,
-            'DEROG': derog,
-            'DELINQ': delinq,
-            'CLAGE': clage,
-            'NINQ': ninq,
-            'CLNO': clno,
-            'DEBTINC': debtinc,
-            # 'BAD' is typically the target variable for training, not an input for prediction.
-            # If it's historical data, it would be used for training, not direct input for scoring.
-        }
+            st.success(f"Analysis complete for '{selected_s3_file}'.")
 
-        score, decision = get_credit_score(input_data)
+    except Exception as e:
+        st.error(f"Error analyzing file from S3: {e}")
+        st.session_state['scored_data'] = pd.DataFrame() # Clear data on error
 
-        st.markdown(f"<div class='score-box'>Credit Score: {score:.2f}</div>", unsafe_allow_html=True)
-        if decision == "Approved":
-            st.markdown(f"<div class='decision-approved'>Decision: {decision}</div>", unsafe_allow_html=True)
-        else:
-            st.markdown(f"<div class='decision-rejected'>Decision: {decision}</div>", unsafe_allow_html=True)
+# --- Display Dashboard ---
+if 'scored_data' in st.session_state and not st.session_state['scored_data'].empty:
+    df_display = st.session_state['scored_data']
 
+    st.subheader("Full Loan Data with Scores and Decisions")
+    st.dataframe(df_display)
+
+    st.subheader("Vulnerable Loans (Rejected)")
+    vulnerable_loans = df_display[df_display['Decision'] == 'Rejected']
+
+    if not vulnerable_loans.empty:
+        st.dataframe(vulnerable_loans)
+        st.info(f"Found {len(vulnerable_loans)} vulnerable loans.")
+    else:
+        st.success("No vulnerable loans found in this dataset!")
+
+# --- AWS and Langchain Integration Explanation (remains the same) ---
 st.markdown("---")
-st.subheader("How this app would integrate with AWS and Langchain:")
+st.subheader("How this app would integrate with AWS and Langchain (Recap):")
 
 st.markdown(
     """
-    This Streamlit app provides a user interface for credit scoring. In a real-world, production-grade setup,
-    the components would be distributed and managed by cloud services.
+    This Streamlit app now demonstrates uploading and analyzing Excel files from AWS S3.
 
     ### ☁️ AWS Cloud Integration:
-    * **Data Storage:** Input data and historical credit data would be stored in AWS S3 (for raw data) or Amazon RDS/DynamoDB (for structured data).
-    * **Machine Learning Model Hosting:** The credit scoring model (e.g., a trained Scikit-learn, TensorFlow, or PyTorch model) would be deployed as an endpoint on **AWS SageMaker**. This allows the Streamlit app to make API calls to SageMaker for real-time predictions.
-    * **Serverless Functions:** **AWS Lambda** could be used for pre-processing input data before sending it to SageMaker, or for post-processing the model's output.
-    * **API Gateway:** If the SageMaker endpoint needs to be exposed securely or with additional logic, **AWS API Gateway** could sit in front of it.
-    * **Authentication & Authorization:** **AWS Cognito** for user management and secure access to the application.
-    * **Logging & Monitoring:** **AWS CloudWatch** for monitoring the application's performance and logging events.
-    * **Deployment:** The Streamlit app itself could be deployed on **AWS EC2** (a virtual server), **AWS Fargate** (serverless containers), or using **Streamlit Cloud** which can connect directly to your GitHub repository.
+    * **Data Storage (S3):** Excel files are now stored in AWS S3, providing durable and scalable storage.
+    * **Machine Learning Model Hosting (SageMaker):** In a real scenario, the `get_credit_score` function would call a model deployed on AWS SageMaker for more accurate predictions.
+    * **Serverless Functions (Lambda):** Could be used for automated processing of new files uploaded to S3.
+    * **Authentication & Authorization (Cognito):** For secure user access to the app and S3.
+    * **Logging & Monitoring (CloudWatch):** To track app performance and S3 interactions.
 
     ### 🔗 Langchain Integration:
-    Langchain is primarily used for building applications with Large Language Models (LLMs). While it's not directly for numerical credit scoring, it could enhance this application in several ways:
-    * **Explainable AI (XAI):** After getting a credit score and decision, Langchain could be used to prompt an LLM to generate a human-readable explanation of *why* a particular decision was made, based on the input variables and the model's output. For example, "Your loan was rejected because your debt-to-income ratio is high and you have recent credit inquiries."
-    * **Conversational Interface:** Users could interact with the app via a chat interface, asking questions about their credit score, what factors influence it, or what steps they can take to improve it. Langchain would orchestrate these conversations, potentially retrieving information from a knowledge base or calling the credit scoring model as a "tool."
-    * **Automated Communication:** Langchain could help in generating personalized emails or messages to applicants based on their credit decision.
+    Langchain is primarily used for building applications with Large Language Models (LLMs). It could enhance this application in several ways:
+    * **Explainable AI (XAI):** After identifying vulnerable loans, Langchain could prompt an LLM to generate more detailed explanations for why certain loans were flagged, based on their specific features.
+    * **Conversational Interface:** Users could query the dashboard using natural language (e.g., "Show me all rejected loans with high debt-to-income ratio"), with Langchain interpreting the query and filtering the DataFrame.
+    * **Automated Reporting:** Langchain could help generate summary reports or alerts for vulnerable loans, potentially integrating with email services.
 
     ### 🚀 GitHub & Streamlit Cloud Deployment:
-    1.  **GitHub Repository:** You would create a GitHub repository containing:
-        * `app.py` (the Streamlit application code)
-        * `requirements.txt` (listing `streamlit`, `pandas`, `numpy`)
-        * Optionally, a `.streamlit/config.toml` for app-specific configurations (but not secrets).
-    2.  **Streamlit Cloud:** You can easily deploy your Streamlit app from GitHub to [Streamlit Cloud](https://streamlit.io/cloud) by connecting your repository. Streamlit Cloud handles the hosting and environment setup. When deploying to Streamlit Cloud, you will be prompted to enter your secrets directly in their web interface, and they will be securely made available to your app via `st.secrets`.
-
-    **To run this app locally:**
-    1.  Create a folder named `.streamlit` in the same directory as `app.py`.
-    2.  Inside the `.streamlit` folder, create a file named `secrets.toml` and add your secret keys as shown above.
-    3.  Save the code above as `app.py`.
-    4.  Ensure you have `requirements.txt` with `streamlit`, `pandas`, `numpy`.
-    5.  Open your terminal, navigate to the directory where you saved the files, and run:
-        ```bash
-        pip install -r requirements.txt
-        streamlit run app.py
-        ```
-    This will open the app in your web browser. You will see the secrets (partially masked) displayed in the sidebar.
+    1.  **GitHub Repository:** Your repository should contain `app.py` and `requirements.txt`. **Crucially, `.streamlit/secrets.toml` should NOT be committed.**
+    2.  **Streamlit Cloud:** Deploy from GitHub. Remember to add your AWS `access_key_id`, `secret_access_key`, and `s3_bucket_name` as secrets in the Streamlit Cloud dashboard (e.g., `aws.access_key_id`, `aws.secret_access_key`, `aws.s3_bucket_name`).
     """
 )
