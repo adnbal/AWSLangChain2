@@ -6,6 +6,7 @@ import io
 import datetime # For unique file naming
 import os
 import time # For a small delay
+import json # For parsing LLM structured output
 
 # Import scikit-learn components
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
@@ -205,6 +206,50 @@ def get_credit_score_ml(df_input: pd.DataFrame, approval_threshold: int, actual_
     decisions = np.where(scores >= approval_threshold, "Approved", "Rejected") 
 
     return pd.DataFrame({'Score': scores, 'Decision': decisions})
+
+
+# --- LLM Integration for Explanations ---
+async def get_llm_explanation(features_dict: dict, score: float, decision: str):
+    """
+    Calls a Gemini LLM to get an explanation for a loan decision.
+    """
+    prompt = f"""
+    You are an expert credit risk analyst. Based on the following loan application features, 
+    explain concisely why this loan received a score of {score:.2f} and was {decision}.
+    Focus on 2-3 key factors from the provided features that likely influenced the decision.
+    
+    Loan Features:
+    {json.dumps(features_dict, indent=2)}
+    
+    Provide a brief, clear explanation (max 50 words).
+    """
+    
+    chatHistory = []
+    chatHistory.push({ "role": "user", "parts": [{ "text": prompt }] })
+    
+    # Use empty string for API key as per instructions for Canvas runtime
+    apiKey = "" 
+    apiUrl = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={apiKey}"
+    
+    try:
+        response = await st.experimental_memo(fetch)(
+            apiUrl,
+            method='POST',
+            headers={'Content-Type': 'application/json'},
+            body=json.dumps({"contents": chatHistory})
+        )
+        
+        result = await response.json()
+        
+        if result and result.get('candidates') and len(result['candidates']) > 0 and \
+           result['candidates'][0].get('content') and result['candidates'][0]['content'].get('parts') and \
+           len(result['candidates'][0]['content']['parts']) > 0:
+            return result['candidates'][0]['content']['parts'][0]['text']
+        else:
+            return "LLM could not generate an explanation."
+    except Exception as e:
+        st.error(f"Error calling LLM for explanation: {e}")
+        return "Failed to get explanation from LLM."
 
 
 # --- Streamlit UI Configuration ---
@@ -633,6 +678,61 @@ if 'scored_data' in st.session_state and not st.session_state['scored_data'].emp
         st.info(f"Found {len(vulnerable_loans)} rejected applicants.") 
     else:
         st.success("No rejected applicants found in this dataset based on current threshold!") 
+
+    # --- New: Summary Statistics Section ---
+    st.markdown("---")
+    st.header("Overall Loan Summary & Average Statistics")
+    
+    total_loans = len(df_display)
+    approved_count = len(df_display[df_display['Decision'] == 'Approved'])
+    rejected_count = len(df_display[df_display['Decision'] == 'Rejected'])
+
+    st.markdown(f"**Total Loans Analyzed:** {total_loans}")
+    st.markdown(f"**Approved Loans:** {approved_count}")
+    st.markdown(f"**Rejected Loans:** {rejected_count}")
+
+    st.subheader("Average Statistics for Approved vs. Rejected Loans")
+
+    # Select only numerical features for mean calculation
+    features_for_stats = [col for col in NUMERICAL_FEATURES if col in df_display.columns]
+
+    if not features_for_stats:
+        st.info("No numerical features available for calculating average statistics.")
+    else:
+        approved_stats = df_display[df_display['Decision'] == 'Approved'][features_for_stats].mean().rename('Approved Avg')
+        rejected_stats = df_display[df_display['Decision'] == 'Rejected'][features_for_stats].mean().rename('Rejected Avg')
+
+        # Combine into a single DataFrame for display
+        summary_stats_df = pd.DataFrame([approved_stats, rejected_stats]).T
+        summary_stats_df.index.name = 'Feature'
+        st.dataframe(summary_stats_df.style.format("{:.2f}"))
+
+        st.info("Compare the average values of key features between approved and rejected loans to understand influencing factors.")
+
+    # --- New: LLM Suggestions for Rejected Loans ---
+    st.markdown("---")
+    st.header("AI-Powered Explanations for Rejected Loans")
+    st.info("Click on a rejected loan's ID to get an AI-generated explanation for the decision.")
+
+    if not worst_10_rejected_loans.empty:
+        for index, row in worst_10_rejected_loans.iterrows():
+            loan_id = row['ID']
+            score = row['Score']
+            decision = row['Decision']
+            
+            # Extract relevant features for the LLM prompt
+            # Convert Series to dictionary for easier LLM input
+            loan_features = row[NUMERICAL_FEATURES + CATEGORICAL_FEATURES].dropna().to_dict()
+
+            with st.expander(f"Explain why Loan ID: **{loan_id}** (Score: {score:.2f}, Decision: {decision}) was rejected"):
+                # Use st.spinner for asynchronous LLM call
+                with st.spinner(f"Generating explanation for {loan_id}..."):
+                    explanation = await get_llm_explanation(loan_features, score, decision)
+                    st.markdown(explanation)
+    else:
+        st.info("No rejected loans to generate explanations for at the current threshold.")
+
+
 else:
     st.write("DEBUG: No scored data found in session state or data is empty. Dashboard not displayed.")
 
