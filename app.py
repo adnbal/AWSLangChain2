@@ -8,10 +8,19 @@ import os
 import time # For a small delay
 
 # --- Dummy Credit Scoring Model ---
+# This function applies the scoring logic to a single row of data.
+# In a real application, this would be a call to a deployed ML model (e.g., AWS SageMaker endpoint).
 def get_credit_score(data_row):
+    """
+    A simple dummy credit scoring function.
+    It takes a dictionary-like object (representing a row of data) and returns a score and a decision.
+    """
+    # Define mappings for categorical variables
     reason_map = {'DebtCon': 0.3, 'HomeImp': 0.2, 'Other': 0.1}
     job_map = {'Mgr': 0.2, 'Office': 0.1, 'Other': 0.05, 'ProfExe': 0.15, 'Sales': 0.1, 'Self': 0.25}
 
+    # Safely get numerical inputs, providing default 0 if a column is missing
+    # This makes the function more robust to variations in uploaded Excel files.
     loan = data_row.get('LOAN', 0)
     mortdue = data_row.get('MORTDUE', 0)
     value = data_row.get('VALUE', 0)
@@ -23,27 +32,34 @@ def get_credit_score(data_row):
     clno = data_row.get('CLNO', 0)
     debtinc = data_row.get('DEBTINC', 0)
 
+    # Safely get categorical inputs, providing 'Other' as default if missing
     reason_score = reason_map.get(data_row.get('REASON', 'Other'), 0.1)
     job_score = job_map.get(data_row.get('JOB', 'Other'), 0.05)
 
+    # Simple heuristic for a dummy score (higher is better)
+    # This calculation is for demonstration purposes only and is not a real credit model.
     score = (
-        (loan / 10000) * 5 +
-        (value / 100000) * 10 -
-        (mortdue / 100000) * 5 +
-        yojs * 0.5 -
-        derog * 20 -
-        delinq * 15 -
-        (clage / 100) * 2 +
-        ninq * 10 -
-        clno * 1 +
-        debtinc * 30 +
+        (loan / 10000) * 5 + # Larger loans might imply higher trust or risk depending on context
+        (value / 100000) * 10 - # Higher value of property is good
+        (mortdue / 100000) * 5 + # Higher mortgage due is bad
+        yojs * 0.5 - # Years on job, more is better
+        derog * 20 - # Derogatory reports, more is bad
+        delinq * 15 - # Delinquent credit lines, more is bad
+        (clage / 100) * 2 + # Age of oldest credit line, more is better
+        ninq * 10 - # Number of recent credit inquiries, more is bad
+        clno * 1 + # Number of credit lines, more is generally good
+        debtinc * 30 + # Debt-to-income ratio, higher is bad
         reason_score * 50 +
         job_score * 50
     )
 
+    # Normalize score to a 0-100 range and clamp it
     score = max(0, min(100, score))
+
+    # Determine decision based on score threshold
     decision = "Approved" if score >= 60 else "Rejected"
     
+    # Return results as a Pandas Series, which is convenient for .apply()
     return pd.Series({'Score': score, 'Decision': decision})
 
 # --- Streamlit UI Configuration ---
@@ -136,12 +152,13 @@ s3_bucket_name = None
 aws_region_name = None
 
 try:
-    # --- CORRECTED: Accessing secrets as nested keys, matching your Streamlit Cloud config ---
+    # --- Accessing secrets as nested keys, matching your Streamlit Cloud config ---
+    # Based on your screenshot, your secrets are defined with [aws] section.
     aws_access_key = st.secrets["aws"]["access_key_id"]
     aws_secret_key = st.secrets["aws"]["secret_access_key"]
     s3_bucket_name = st.secrets["aws"]["s3_bucket_name"]
     aws_region_name = st.secrets["aws"]["region_name"]
-    # If you have other top-level secrets, you'd access them like:
+    # If you had other top-level secrets (like OPENAI_API_KEY), you'd access them like:
     # openai_api_key = st.secrets.get("OPENAI_API_KEY", "NOT_SET") 
 
     s3_client = boto3.client(
@@ -157,7 +174,7 @@ try:
     st.sidebar.write(f"AWS Secret Access Key: `{aws_secret_key[:4]}...`")
     st.sidebar.write(f"S3 Bucket Name: `{s3_bucket_name}`")
     st.sidebar.write(f"AWS Region: `{aws_region_name}`")
-    # if openai_api_key != "NOT_SET":
+    # if 'openai_api_key' in locals() and openai_api_key != "NOT_SET":
     #    st.sidebar.write(f"OpenAI API Key: `{openai_api_key[:4]}...`")
 
 except KeyError as e:
@@ -181,8 +198,11 @@ if uploaded_file is not None:
             s3_client.upload_fileobj(uploaded_file, s3_bucket_name, s3_file_key)
         st.success(f"File '{file_name}' uploaded successfully to S3 as '{s3_file_key}'!")
         st.session_state['last_uploaded_s3_key'] = s3_file_key
+        # --- IMPORTANT: REMOVED st.rerun() / st.experimental_rerun() ---
+        # This line was causing the loop due to older Streamlit versions.
+        # User will manually select the uploaded file from the dropdown.
         st.info("File uploaded. Please select it from the dropdown below and click 'Analyze'.")
-        time.sleep(1) 
+        time.sleep(1) # A small delay to ensure the info message is seen
     except Exception as e:
         st.error(f"Error uploading file to S3: {e}")
 
