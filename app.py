@@ -26,11 +26,9 @@ st.session_state.setdefault('selected_file_for_analysis', None)
 st.session_state.setdefault('file_uploader_key', 0) 
 st.session_state.setdefault('approval_threshold', 50) # Default approval threshold
 st.session_state.setdefault('uploaded_df_columns', []) # To store columns of the last uploaded file
-st.session_state.setdefault('selected_target_column', 'Default') # NEW: Default target column name is 'Default'
+st.session_state.setdefault('selected_target_column', 'Default') # Default target column name is 'Default'
 
 # --- Define Feature Columns for the 'credit.csv' dataset ---
-# These are the FEATURES that the ML model will use for prediction.
-# The actual target column will be selected by the user.
 NUMERICAL_FEATURES = [
     'DerogCnt', 'CollectCnt', 'BanruptcyInd', 'InqCnt06', 'InqTimeLast', 'InqFinanceCnt24',
     'TLTimeFirst', 'TLTimeLast', 'TLCnt03', 'TLCnt12', 'TLCnt24', 'TLCnt',
@@ -38,48 +36,76 @@ NUMERICAL_FEATURES = [
     'TL75UtilCnt', 'TL50UtilCnt', 'TLBalHCPct', 'TLSatPct', 'TLDel3060Cnt24',
     'TLDel90Cnt24', 'TLDel60CntAll', 'TLOpenPct', 'TLBadDerogCnt', 'TLOpen24Pct'
 ]
-CATEGORICAL_FEATURES = [] # Based on previous analysis, no explicit categorical features
+CATEGORICAL_FEATURES = [] # No explicit categorical features based on previous analysis
 
-# The actual target column name from the uploaded CSV, now set to 'Default'
-TARGET_COLUMN = 'Default' 
-
-# ALL_FEATURES will be dynamically constructed based on user's target column selection.
-# For dummy training, we'll use a fixed 'Default' column.
+TARGET_COLUMN = 'Default' # The column to predict, as confirmed by user
 DUMMY_TARGET_COLUMN_NAME = TARGET_COLUMN 
 
 # --- Simulate Model Training and Preprocessing for the NEW dataset ---
-# This dummy data MUST have the same column names and types as your actual CSV.
-# It's used to initialize the model pipeline structure.
+# This dummy data is significantly expanded and designed to force the model
+# to learn patterns for both defaulting (1) and non-defaulting (0) cases.
+# It includes more varied values and clearer distinctions.
 dummy_data_for_training = pd.DataFrame({
-    'DerogCnt': [1, 0, 2, 0, 1, 0],
-    'CollectCnt': [0, 1, 0, 0, 0, 1],
-    'BanruptcyInd': [0, 1, 0, 0, 0, 1], 
-    'InqCnt06': [3, 1, 5, 2, 0, 4],
-    'InqTimeLast': [10, 5, 15, 8, 20, 12],
-    'InqFinanceCnt24': [2, 1, 3, 1, 0, 2],
-    'TLTimeFirst': [120, 80, 200, 90, 150, 100],
-    'TLTimeLast': [15, 10, 25, 12, 18, 14],
-    'TLCnt03': [1, 0, 2, 1, 0, 1],
-    'TLCnt12': [3, 2, 5, 3, 1, 4],
-    'TLCnt24': [5, 4, 8, 6, 2, 7],
-    'TLCnt': [10, 8, 15, 12, 5, 13],
-    'TLSum': [50000, 30000, 80000, 45000, 20000, 60000],
-    'TLMaxSum': [15000, 10000, 25000, 12000, 8000, 18000],
-    'TLSatCnt': [8, 6, 12, 9, 4, 10],
-    'TLDel60Cnt': [0, 1, 0, 0, 1, 0],
-    'TLBadCnt24': [0, 1, 0, 0, 1, 0],
-    'TL75UtilCnt': [2, 1, 3, 1, 0, 2],
-    'TL50UtilCnt': [4, 2, 6, 3, 1, 4],
-    'TLBalHCPct': [0.6, 0.8, 0.5, 0.7, 0.9, 0.65],
-    'TLSatPct': [0.8, 0.7, 0.85, 0.75, 0.6, 0.82],
-    'TLDel3060Cnt24': [0, 0, 1, 0, 0, 1],
-    'TLDel90Cnt24': [0, 1, 0, 0, 0, 0],
-    'TLDel60CntAll': [0, 1, 0, 0, 1, 1],
-    'TLOpenPct': [0.5, 0.3, 0.6, 0.4, 0.2, 0.55],
-    'TLBadDerogCnt': [0, 1, 0, 0, 1, 0],
-    'TLOpen24Pct': [0.7, 0.4, 0.8, 0.5, 0.3, 0.75],
-    DUMMY_TARGET_COLUMN_NAME: [0, 1, 0, 0, 1, 1] # Dummy target variable (0: Good, 1: Bad)
-})
+    # Good applicants (Default = 0) - low derogatory, high credit age, low inquiries
+    'DerogCnt': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    'CollectCnt': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    'BanruptcyInd': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    'InqCnt06': [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0],
+    'InqTimeLast': [100, 120, 110, 130, 90, 115, 125, 105, 95, 135, 100, 120, 110, 130, 90, 115, 125, 105, 95, 135],
+    'InqFinanceCnt24': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    'TLTimeFirst': [200, 250, 220, 280, 180, 230, 260, 210, 190, 290, 200, 250, 220, 280, 180, 230, 260, 210, 190, 290],
+    'TLTimeLast': [30, 40, 35, 45, 25, 38, 42, 32, 28, 48, 30, 40, 35, 45, 25, 38, 42, 32, 28, 48],
+    'TLCnt03': [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0],
+    'TLCnt12': [3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2],
+    'TLCnt24': [5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4],
+    'TLCnt': [10, 8, 10, 8, 10, 8, 10, 8, 10, 8, 10, 8, 10, 8, 10, 8, 10, 8, 10, 8],
+    'TLSum': [50000, 60000, 55000, 65000, 45000, 58000, 62000, 52000, 48000, 68000, 50000, 60000, 55000, 65000, 45000, 58000, 62000, 52000, 48000, 68000],
+    'TLMaxSum': [15000, 18000, 16000, 20000, 12000, 17000, 19000, 14000, 13000, 22000, 15000, 18000, 16000, 20000, 12000, 17000, 19000, 14000, 13000, 22000],
+    'TLSatCnt': [8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9],
+    'TLDel60Cnt': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    'TLBadCnt24': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    'TL75UtilCnt': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    'TL50UtilCnt': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    'TLBalHCPct': [0.2, 0.15, 0.25, 0.18, 0.3, 0.22, 0.19, 0.28, 0.21, 0.17, 0.2, 0.15, 0.25, 0.18, 0.3, 0.22, 0.19, 0.28, 0.21, 0.17],
+    'TLSatPct': [0.95, 0.98, 0.96, 0.97, 0.94, 0.97, 0.95, 0.98, 0.96, 0.97, 0.95, 0.98, 0.96, 0.97, 0.94, 0.97, 0.95, 0.98, 0.96, 0.97],
+    'TLDel3060Cnt24': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    'TLDel90Cnt24': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    'TLDel60CntAll': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    'TLOpenPct': [0.8, 0.75, 0.82, 0.78, 0.85, 0.79, 0.81, 0.77, 0.83, 0.76, 0.8, 0.75, 0.82, 0.78, 0.85, 0.79, 0.81, 0.77, 0.83, 0.76],
+    'TLBadDerogCnt': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    'TLOpen24Pct': [0.9, 0.88, 0.92, 0.89, 0.95, 0.91, 0.93, 0.87, 0.94, 0.90, 0.9, 0.88, 0.92, 0.89, 0.95, 0.91, 0.93, 0.87, 0.94, 0.90],
+    DUMMY_TARGET_COLUMN_NAME: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+}).append(pd.DataFrame({ # Bad applicants (Default = 1) - high derogatory, low credit age, high inquiries
+    'DerogCnt': [1, 2, 3, 1, 2, 3, 1, 2, 3, 1],
+    'CollectCnt': [1, 1, 2, 1, 1, 2, 1, 1, 2, 1],
+    'BanruptcyInd': [0, 1, 0, 1, 0, 1, 0, 1, 0, 1],
+    'InqCnt06': [5, 4, 6, 5, 4, 6, 5, 4, 6, 5],
+    'InqTimeLast': [10, 20, 15, 25, 12, 18, 22, 14, 28, 16],
+    'InqFinanceCnt24': [2, 3, 4, 2, 3, 4, 2, 3, 4, 2],
+    'TLTimeFirst': [50, 40, 60, 35, 70, 45, 55, 30, 65, 38],
+    'TLTimeLast': [5, 8, 6, 9, 4, 7, 10, 3, 11, 5],
+    'TLCnt03': [2, 3, 4, 2, 3, 4, 2, 3, 4, 2],
+    'TLCnt12': [6, 7, 8, 6, 7, 8, 6, 7, 8, 6],
+    'TLCnt24': [10, 12, 15, 10, 12, 15, 10, 12, 15, 10],
+    'TLCnt': [15, 18, 20, 15, 18, 20, 15, 18, 20, 15],
+    'TLSum': [20000, 25000, 18000, 30000, 22000, 28000, 21000, 26000, 23000, 29000],
+    'TLMaxSum': [5000, 7000, 4000, 8000, 6000, 7500, 5500, 6500, 4500, 8500],
+    'TLSatCnt': [2, 3, 1, 4, 2, 3, 1, 4, 2, 3],
+    'TLDel60Cnt': [1, 2, 1, 2, 1, 2, 1, 2, 1, 2],
+    'TLBadCnt24': [1, 1, 2, 1, 1, 2, 1, 1, 2, 1],
+    'TL75UtilCnt': [3, 4, 2, 5, 3, 4, 2, 5, 3, 4],
+    'TL50UtilCnt': [5, 6, 4, 7, 5, 6, 4, 7, 5, 6],
+    'TLBalHCPct': [0.8, 0.85, 0.75, 0.9, 0.78, 0.82, 0.79, 0.88, 0.81, 0.86],
+    'TLSatPct': [0.5, 0.4, 0.6, 0.3, 0.55, 0.45, 0.65, 0.35, 0.58, 0.48],
+    'TLDel3060Cnt24': [1, 2, 1, 2, 1, 2, 1, 2, 1, 2],
+    'TLDel90Cnt24': [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    'TLDel60CntAll': [2, 3, 2, 3, 2, 3, 2, 3, 2, 3],
+    'TLOpenPct': [0.2, 0.15, 0.25, 0.1, 0.22, 0.18, 0.28, 0.12, 0.21, 0.17],
+    'TLBadDerogCnt': [1, 2, 1, 2, 1, 2, 1, 2, 1, 2],
+    'TLOpen24Pct': [0.3, 0.25, 0.35, 0.2, 0.32, 0.28, 0.38, 0.22, 0.31, 0.27],
+    DUMMY_TARGET_COLUMN_NAME: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+}), ignore_index=True)
+
 
 # Define preprocessing steps
 numerical_transformer = Pipeline(steps=[
@@ -106,9 +132,14 @@ model_pipeline = Pipeline(steps=[
 
 # "Fit" the pipeline on the dummy data
 try:
-    # Ensure dummy data has all necessary columns for fitting preprocessor
     dummy_features = NUMERICAL_FEATURES + CATEGORICAL_FEATURES
     
+    # Ensure all dummy_features exist in dummy_data_for_training before fitting
+    missing_dummy_features = [col for col in dummy_features if col not in dummy_data_for_training.columns]
+    if missing_dummy_features:
+        st.sidebar.error(f"Missing dummy features for model training: {missing_dummy_features}. Please check dummy_data_for_training.")
+        st.stop()
+
     model_pipeline.fit(dummy_data_for_training[dummy_features], dummy_data_for_training[DUMMY_TARGET_COLUMN_NAME])
     st.sidebar.success("Simulated ML model (HistGradientBoostingClassifier) and preprocessor initialized for new data.")
 except Exception as e:
@@ -354,23 +385,20 @@ with st.form("analysis_trigger_form"):
     else:
         st.info("No CSV files found in the 'uploads/' folder of your S3 bucket. Please upload one above.")
 
-    # NEW: Target Column Selector
+    # Target Column Selector (only show if a file is selected)
     if selected_s3_file_in_form:
-        # Temporarily read the file to get columns for the selector
         try:
             temp_obj = s3_client.get_object(Bucket=s3_bucket_name, Key=selected_s3_file_in_form)
             temp_df = pd.read_csv(io.BytesIO(temp_obj['Body'].read()))
             st.session_state['uploaded_df_columns'] = temp_df.columns.tolist()
             
-            # Try to pre-select 'Default' if it exists, otherwise default to first column
             default_target_idx = 0
             if TARGET_COLUMN in st.session_state['uploaded_df_columns']:
                 default_target_idx = st.session_state['uploaded_df_columns'].index(TARGET_COLUMN)
             elif len(st.session_state['uploaded_df_columns']) > 0:
-                # If 'Default' not found, try to use the first column as a fallback
-                st.warning(f"'{TARGET_COLUMN}' column not found. Please select the correct target column.")
-                default_target_idx = 0 # Default to the very first column
-
+                st.warning(f"Default target column '{TARGET_COLUMN}' not found. Please select the correct target column.")
+                default_target_idx = 0 
+            
             st.session_state['selected_target_column'] = st.selectbox(
                 "Select the Target Column (e.g., 'Default', 'TARGET'):",
                 options=st.session_state['uploaded_df_columns'],
@@ -378,10 +406,13 @@ with st.form("analysis_trigger_form"):
                 key="target_column_selector"
             )
         except Exception as e:
-            st.error(f"Error reading selected file to get columns: {e}")
-            st.session_state['uploaded_df_columns'] = [] # Clear columns on error
-            st.session_state['selected_target_column'] = '' # Clear selected target
-            st.stop() # Stop execution if columns cannot be read
+            st.error(f"Error reading selected file to get columns for target selector: {e}")
+            st.session_state['uploaded_df_columns'] = [] 
+            st.session_state['selected_target_column'] = '' 
+            # Do not stop here, allow user to try analyze, which will catch the error later
+    else:
+        st.session_state['uploaded_df_columns'] = [] # Clear columns if no file selected
+        st.session_state['selected_target_column'] = '' # Clear selected target
 
     # This is the button that submits the form and triggers analysis
     analyze_submitted = st.form_submit_button(f"Analyze Selected File")
