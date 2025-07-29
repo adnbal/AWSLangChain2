@@ -741,24 +741,29 @@ if 'scored_data' in st.session_state and not st.session_state['scored_data'].emp
     # Take a sample for sparkline if data is too large
     sparkline_data_sample = dummy_trend_data.sample(min(50, len(dummy_trend_data))).sort_values('Date')
 
+    # Ensure numerical columns are truly numeric before aggregation
+    df_display_numeric = df_display.copy()
+    for col in ['TLSum', 'Score', 'TLCnt', 'TLBadCnt24']:
+        if col in df_display_numeric.columns:
+            df_display_numeric[col] = pd.to_numeric(df_display_numeric[col], errors='coerce').fillna(0)
 
     with col_metrics[0]:
-        current_tlsum = df_display['TLSum'].sum() if 'TLSum' in df_display.columns else 0
+        current_tlsum = df_display_numeric['TLSum'].sum() if 'TLSum' in df_display_numeric.columns else 0
         prev_tlsum = current_tlsum * 0.95 # Dummy previous year
         create_metric_card("Total Loan Sum", current_tlsum, prev_tlsum, unit="", chart_data=sparkline_data_sample, chart_y_col='Value')
 
     with col_metrics[1]:
-        current_score_avg = df_display['Score'].mean() if 'Score' in df_display.columns else 0
+        current_score_avg = df_display_numeric['Score'].mean() if 'Score' in df_display_numeric.columns else 0
         prev_score_avg = current_score_avg * 1.02 # Dummy previous year
         create_metric_card("Avg Credit Score", current_score_avg, prev_score_avg, is_percentage=False, chart_data=sparkline_data_sample, chart_y_col='Value')
 
     with col_metrics[2]:
-        current_tlcnt = df_display['TLCnt'].sum() if 'TLCnt' in df_display.columns else 0
+        current_tlcnt = df_display_numeric['TLCnt'].sum() if 'TLCnt' in df_display_numeric.columns else 0
         prev_tlcnt = current_tlcnt * 0.9 # Dummy previous year
         create_metric_card("Total Trades", current_tlcnt, prev_tlcnt, unit="", chart_data=sparkline_data_sample, chart_y_col='Value')
 
     with col_metrics[3]:
-        current_bad_cnt = df_display['TLBadCnt24'].sum() if 'TLBadCnt24' in df_display.columns else 0
+        current_bad_cnt = df_display_numeric['TLBadCnt24'].sum() if 'TLBadCnt24' in df_display_numeric.columns else 0
         prev_bad_cnt = current_bad_cnt * 1.1 # Dummy previous year (increased bad count)
         create_metric_card("Bad Trades (24M)", current_bad_cnt, prev_bad_cnt, unit="", chart_data=sparkline_data_sample, chart_y_col='Value')
 
