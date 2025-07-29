@@ -6,8 +6,6 @@ import io
 import datetime
 import os
 import time
-# Removed: import json
-# Removed: import requests # For making HTTP requests to the LLM API
 
 # Import scikit-learn components
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
@@ -21,21 +19,20 @@ import plotly.express as px
 
 # --- Initialize session state variables using setdefault for robustness ---
 st.session_state.setdefault('scored_data', pd.DataFrame())
-st.session_state.setdefault('analyze_triggered', False) # Flag to explicitly trigger analysis
 st.session_state.setdefault('last_uploaded_s3_key', None)
-st.session_state.setdefault('selected_file_for_analysis', None) # Stores the S3 key of the file to analyze
 st.session_state.setdefault('file_uploader_key', 0) 
 st.session_state.setdefault('approval_threshold', 50) # Default approval threshold
 st.session_state.setdefault('uploaded_df_columns', []) # To store columns of the last uploaded file
 st.session_state.setdefault('selected_target_column', 'TARGET') # Default target column name is 'TARGET' for credit.csv
 
 # --- Define Feature Columns for the 'credit.csv' dataset ---
+# This list MUST match the features the model expects, and accounts for the duplicate column in your CSV.
 NUMERICAL_FEATURES = [
     'DerogCnt', 'CollectCnt', 'BanruptcyInd', 'InqCnt06', 'InqTimeLast', 'InqFinanceCnt24',
     'TLTimeFirst', 'TLTimeLast', 'TLCnt03', 'TLCnt12', 'TLCnt24', 'TLCnt',
-    'TLSum', 'TLMaxSum', 'TLSatCnt', 'TLDel60Cnt', 'TLDel60Cnt24', # Added TLDel60Cnt24 here to match CSV
+    'TLSum', 'TLMaxSum', 'TLSatCnt', 'TLDel60Cnt', 'TLDel60Cnt24', # Corrected: TLDel60Cnt24 is here once
     'TLBadCnt24', 'TL75UtilCnt', 'TL50UtilCnt', 'TLBalHCPct', 'TLSatPct', 'TLDel3060Cnt24',
-    'TLDel90Cnt24', 'TLDel60CntAll', 'TLOpenPct', 'TLBadDerogCnt', 'TLOpen24Pct' # Removed the duplicate TLDel60Cnt24 from here
+    'TLDel90Cnt24', 'TLDel60CntAll', 'TLOpenPct', 'TLBadDerogCnt', 'TLOpen24Pct'
 ]
 CATEGORICAL_FEATURES = [] # No explicit categorical features based on previous analysis
 
@@ -237,9 +234,6 @@ def get_credit_score_ml(df_input: pd.DataFrame, approval_threshold: int, actual_
     return pd.DataFrame({'Score': scores, 'Decision': decisions})
 
 
-# Removed: LLM Integration for Explanations (get_llm_explanation function)
-
-
 # --- Streamlit App Layout ---
 st.set_page_config(page_title="Credit Scoring Dashboard", layout="wide")
 
@@ -303,7 +297,7 @@ if uploaded_file is not None:
         st.session_state['last_uploaded_s3_key'] = s3_file_key
         # Clear previous analysis data to force re-analysis
         st.session_state['scored_data'] = pd.DataFrame()
-        st.session_state['analyze_triggered'] = False # Reset trigger
+        # No need to set analyze_triggered here, as analysis is now direct
         st.sidebar.info("File uploaded. Please select it from the dropdown below and click 'Analyze'.")
         time.sleep(1) # Give user a moment to read success message
         clear_file_uploader() # Reset uploader widget
@@ -383,80 +377,72 @@ with st.sidebar.form("analysis_trigger_form"):
 
     if analyze_submitted:
         if selected_s3_file_in_form and st.session_state['selected_target_column']:
-            st.session_state['selected_file_for_analysis'] = selected_s3_file_in_form
-            st.session_state['analyze_triggered'] = True # Set flag to trigger analysis
-            st.session_state['scored_data'] = pd.DataFrame() # Clear old data
-            st.rerun() # Force a rerun to immediately trigger the analysis block
+            file_to_analyze = selected_s3_file_in_form
+            actual_target_col_name = st.session_state['selected_target_column']
+
+            if not actual_target_col_name:
+                st.error("No target column selected. Please select one from the dropdown.")
+            else:
+                try:
+                    with st.spinner(f"Downloading and analyzing '{file_to_analyze}' from S3..."):
+                        obj = s3_client.get_object(Bucket=s3_bucket_name, Key=file_to_analyze)
+                        df = pd.read_csv(io.BytesIO(obj['Body'].read()))
+                        st.write(f"DEBUG: Original columns in loaded CSV: {df.columns.tolist()}")
+
+                        # --- CRITICAL FIX: Handle duplicate column name from CSV ---
+                        # Pandas renames duplicate columns with '.1', '.2', etc.
+                        # We assume the first instance of 'TLDel60Cnt24' is the one we want to use for the model.
+                        # If 'TLDel60Cnt24.1' exists, it means there was a duplicate in the CSV. Drop it.
+                        if 'TLDel60Cnt24.1' in df.columns:
+                            st.write("DEBUG: Dropping duplicate column 'TLDel60Cnt24.1' found in uploaded CSV.")
+                            df = df.drop(columns=['TLDel60Cnt24.1'])
+
+
+                        # Ensure 'ID' column exists for merging later
+                        if 'ID' not in df.columns:
+                            df['ID'] = df.index.astype(str) + '_idx'
+                        else:
+                            df['ID'] = df['ID'].astype(str) # Ensure ID is string type
+
+                        # Convert target column to numeric and handle NaNs
+                        if actual_target_col_name in df.columns:
+                            df[actual_target_col_name] = pd.to_numeric(df[actual_target_col_name], errors='coerce').fillna(0).astype(int)
+                        else:
+                            st.error(f"The selected target column '{actual_target_col_name}' was not found in the uploaded data. Please check your CSV and select the correct column.")
+                            st.session_state['scored_data'] = pd.DataFrame() # Clear on error
+                            return # Exit function early if target column is missing
+
+                        st.write(f"DEBUG: DataFrame columns before passing to ML scoring: {df.columns.tolist()}")
+                        results_df = get_credit_score_ml(df.copy(), st.session_state['approval_threshold'], actual_target_col_name)
+                        st.write(f"DEBUG: Results DataFrame from ML scoring: {results_df.head()}")
+
+                        # Reorder columns to have ID first, then original columns, then Score and Decision
+                        if 'ID' in df.columns:
+                            cols = ['ID'] + [col for col in df.columns if col != 'ID']
+                            df = df[cols]
+
+                        df_scored = pd.concat([df, results_df], axis=1)
+                        st.session_state['scored_data'] = df_scored
+                        st.success(f"Analysis complete for '{file_to_analyze}'.")
+                        st.write(f"DEBUG: Final scored_data shape after analysis: {st.session_state['scored_data'].shape}")
+                        st.rerun() # Force a rerun to display the dashboard with new data
+
+                except Exception as e:
+                    st.error(f"Error analyzing file from S3: {e}. Please check file format and column names in your CSV file.")
+                    st.write(f"Detailed error: {e}") # Provide more detailed error to user
+                    st.session_state['scored_data'] = pd.DataFrame() # Clear on error
         else:
             st.sidebar.warning("Please select a file and a target column to analyze.")
 
 # --- Clear Displayed Data Button (in sidebar) ---
+# This button should only appear if there is data to clear
 if not st.session_state['scored_data'].empty:
     if st.sidebar.button("Clear Displayed Data", key="clear_data_button_sidebar"):
         st.session_state['scored_data'] = pd.DataFrame()
         st.session_state['selected_file_for_analysis'] = None
-        st.session_state['analyze_triggered'] = False # Reset trigger
+        # No need to reset analyze_triggered as it's not used in the new flow
         st.sidebar.success("Displayed data cleared.")
         st.rerun()
-
-
-# --- Main Content Area: Analysis and Dashboard Display ---
-
-# This block performs analysis ONLY if the analyze_triggered flag is set
-if st.session_state['analyze_triggered'] and st.session_state['selected_file_for_analysis']:
-    file_to_analyze = st.session_state['selected_file_for_analysis']
-    actual_target_col_name = st.session_state['selected_target_column']
-
-    if not actual_target_col_name:
-        st.error("No target column selected. Please select one from the dropdown.")
-        st.session_state['analyze_triggered'] = False # Reset trigger
-        st.session_state['selected_file_for_analysis'] = None
-    else:
-        try:
-            with st.spinner(f"Downloading and analyzing '{file_to_analyze}' from S3..."):
-                obj = s3_client.get_object(Bucket=s3_bucket_name, Key=file_to_analyze)
-                df = pd.read_csv(io.BytesIO(obj['Body'].read()))
-                st.write(f"DEBUG: Original columns in loaded CSV: {df.columns.tolist()}")
-
-
-                # Ensure 'ID' column exists for merging later
-                if 'ID' not in df.columns:
-                    df['ID'] = df.index.astype(str) + '_idx'
-                else:
-                    df['ID'] = df['ID'].astype(str) # Ensure ID is string type
-
-                # Convert target column to numeric and handle NaNs
-                if actual_target_col_name in df.columns:
-                    df[actual_target_col_name] = pd.to_numeric(df[actual_target_col_name], errors='coerce').fillna(0).astype(int)
-                else:
-                    st.error(f"The selected target column '{actual_target_col_name}' was not found in the uploaded data. Please check your CSV and select the correct column.")
-                    st.session_state['scored_data'] = pd.DataFrame()
-                    st.session_state['analyze_triggered'] = False
-                    st.session_state['selected_file_for_analysis'] = None
-                    st.rerun() # Rerun to show error and reset state
-
-
-                results_df = get_credit_score_ml(df.copy(), st.session_state['approval_threshold'], actual_target_col_name)
-
-                # Reorder columns to have ID first, then original columns, then Score and Decision
-                if 'ID' in df.columns:
-                    cols = ['ID'] + [col for col in df.columns if col != 'ID']
-                    df = df[cols]
-
-                df_scored = pd.concat([df, results_df], axis=1)
-                st.session_state['scored_data'] = df_scored
-                st.session_state['analyze_triggered'] = False # Analysis complete, reset flag
-                st.success(f"Analysis complete for '{file_to_analyze}'.")
-                st.write(f"DEBUG: Final scored_data shape: {st.session_state['scored_data'].shape}")
-                st.rerun() # Force a rerun to display the dashboard with new data
-
-        except Exception as e:
-            st.error(f"Error analyzing file from S3: {e}. Please check file format and column names in your CSV file.")
-            st.write(f"Detailed error: {e}") # Provide more detailed error to user
-            st.session_state['scored_data'] = pd.DataFrame() # Clear on error
-            st.session_state['analyze_triggered'] = False # Reset trigger
-            st.session_state['selected_file_for_analysis'] = None # Reset on error
-            st.rerun() # Rerun to show error and reset state
 
 
 # --- Display Dashboard Results if scored_data is available ---
@@ -552,9 +538,6 @@ if not st.session_state['scored_data'].empty:
     # Display the scored data table
     st.subheader("Scored Credit Data")
     st.dataframe(df_display)
-
-    # Removed: AI-Powered Explanations for Rejected Loans section
-    # Removed: LLM explanation loop
 
 else:
     st.info("Upload a CSV file and click 'Analyze' to view the dashboard.")
