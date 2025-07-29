@@ -22,6 +22,8 @@ import plotly.graph_objects as go
 
 # --- Initialize session state variables using setdefault for robustness ---
 st.session_state.setdefault('scored_data', pd.DataFrame())
+st.session_state.setdefault('analyze_triggered', False) # Flag to explicitly trigger analysis
+st.session_state.setdefault('last_uploaded_s3_key', None)
 st.session_state.setdefault('selected_file_for_analysis', None) # Stores the S3 key of the file to analyze
 st.session_state.setdefault('file_uploader_key', 0) 
 st.session_state.setdefault('approval_threshold', 50) # Default approval threshold
@@ -582,8 +584,8 @@ if uploaded_file is not None:
             s3_client.upload_fileobj(uploaded_file, s3_bucket_name, s3_file_key)
         st.sidebar.success(f"File '{file_name}' uploaded successfully to S3 as '{s3_file_key}'!")
         st.session_state['last_uploaded_s3_key'] = s3_file_key
-        st.session_state['selected_file_for_analysis'] = None # Clear previous selection to force re-analysis
-        st.session_state['scored_data'] = pd.DataFrame() # Clear previous data
+        st.session_state['scored_data'] = pd.DataFrame() # Clear previous data to force re-analysis
+        st.session_state['analyze_triggered'] = False # Reset trigger
         st.sidebar.info("File uploaded. Please select it from the dropdown below and click 'Analyze'.")
         time.sleep(1) 
 
@@ -606,6 +608,7 @@ except Exception as e:
     st.sidebar.warning(f"Could not list files from S3 bucket: {e}. Ensure 'uploads/' prefix exists or bucket is not empty, and permissions are correct.")
     s3_files = []
 
+# --- Analysis Trigger Form ---
 with st.sidebar.form("analysis_trigger_form"):
     st.markdown("### Select File for Analysis")
     
@@ -658,74 +661,73 @@ with st.sidebar.form("analysis_trigger_form"):
 
     if analyze_submitted:
         if selected_s3_file_in_form and st.session_state['selected_target_column']:
-            # Set the file to analyze. The main analysis block will pick this up.
-            st.session_state['selected_file_for_analysis'] = selected_s3_file_in_form
-            # Clear scored_data to force re-analysis if a new file is selected or re-analyzed
-            st.session_state['scored_data'] = pd.DataFrame() 
-            # No st.rerun() here, form submission implicitly reruns.
+            st.session_state['selected_file_for_analysis'] = selected_s3_file_in_form 
+            st.session_state['analyze_triggered'] = True # Set the flag to trigger analysis
+            st.session_state['scored_data'] = pd.DataFrame() # Clear previous data to ensure re-analysis
+            st.rerun() # Force a rerun to immediately trigger the analysis block
         else:
             st.sidebar.warning("Please select a file and a target column to analyze.")
 
-if st.session_state['scored_data'] is not None and not st.session_state['scored_data'].empty:
+# --- Clear Data Button (in sidebar) ---
+if not st.session_state['scored_data'].empty:
     if st.sidebar.button("Clear Displayed Data", key="clear_data_button_sidebar"):
         st.session_state['scored_data'] = pd.DataFrame()
-        st.session_state['selected_file_for_analysis'] = None # Also clear selected file
+        st.session_state['selected_file_for_analysis'] = None
+        st.session_state['analyze_triggered'] = False # Reset trigger
         st.sidebar.success("Displayed data cleared.")
         st.rerun() 
 
 # --- Main Dashboard Content: Analysis and Display Logic ---
 
-# This block performs analysis ONLY if a file is selected AND scored_data is empty
-# OR if the selected file has changed since the last scoring.
-if st.session_state['selected_file_for_analysis'] and \
-   (st.session_state['scored_data'].empty or \
-    st.session_state['scored_data'].attrs.get('source_file') != st.session_state['selected_file_for_analysis']):
-
+# Perform analysis if triggered and a file is selected
+if st.session_state['analyze_triggered'] and st.session_state['selected_file_for_analysis']:
     file_to_analyze = st.session_state['selected_file_for_analysis']
     actual_target_col_name = st.session_state['selected_target_column'] 
 
     if not actual_target_col_name:
         st.error("No target column selected. Please select one from the dropdown.")
-        st.session_state['selected_file_for_analysis'] = None # Reset to force re-selection
-        st.stop() # Stop execution to prevent further errors
+        st.session_state['analyze_triggered'] = False # Reset trigger
+        st.session_state['selected_file_for_analysis'] = None 
+        # No st.stop() here, allow the rest of the app to render the info message
+    else:
+        try:
+            with st.spinner(f"Downloading and analyzing '{file_to_analyze}' from S3..."):
+                obj = s3_client.get_object(Bucket=s3_bucket_name, Key=file_to_analyze)
+                df = pd.read_csv(io.BytesIO(obj['Body'].read())) 
 
-    try:
-        with st.spinner(f"Downloading and analyzing '{file_to_analyze}' from S3..."):
-            obj = s3_client.get_object(Bucket=s3_bucket_name, Key=file_to_analyze)
-            df = pd.read_csv(io.BytesIO(obj['Body'].read())) 
+                if 'ID' not in df.columns:
+                    df['ID'] = df.index.astype(str) + '_idx'
+                else:
+                    df['ID'] = df['ID'].astype(str)
 
-            if 'ID' not in df.columns:
-                df['ID'] = df.index.astype(str) + '_idx'
-            else:
-                df['ID'] = df['ID'].astype(str)
+                if actual_target_col_name in df.columns:
+                    df[actual_target_col_name] = pd.to_numeric(df[actual_target_col_name], errors='coerce').fillna(0).astype(int)
+                else:
+                    st.error(f"The selected target column '{actual_target_col_name}' was not found in the uploaded data. Please check your CSV and select the correct column.")
+                    st.session_state['scored_data'] = pd.DataFrame()
+                    st.session_state['analyze_triggered'] = False
+                    st.session_state['selected_file_for_analysis'] = None
+                    # No st.stop() here
+                    
+                results_df = get_credit_score_ml(df.copy(), st.session_state['approval_threshold'], actual_target_col_name) 
+                
+                if 'ID' in df.columns:
+                    cols = ['ID'] + [col for col in df.columns if col != 'ID']
+                    df = df[cols]
 
-            if actual_target_col_name in df.columns:
-                df[actual_target_col_name] = pd.to_numeric(df[actual_target_col_name], errors='coerce').fillna(0).astype(int)
-            else:
-                st.error(f"The selected target column '{actual_target_col_name}' was not found in the uploaded data. Please check your CSV and select the correct column.")
-                st.session_state['scored_data'] = pd.DataFrame()
-                st.session_state['selected_file_for_analysis'] = None
-                st.stop() 
+                df_scored = pd.concat([df, results_df], axis=1)
+                st.session_state['scored_data'] = df_scored
+                st.session_state['analyze_triggered'] = False # Analysis complete, reset flag
+                st.success(f"Analysis complete for '{file_to_analyze}'.")
+                st.rerun() # Force a rerun to display the dashboard with new data
 
-            results_df = get_credit_score_ml(df.copy(), st.session_state['approval_threshold'], actual_target_col_name) 
-            
-            if 'ID' in df.columns:
-                cols = ['ID'] + [col for col in df.columns if col != 'ID']
-                df = df[cols]
-
-            df_scored = pd.concat([df, results_df], axis=1)
-            st.session_state['scored_data'] = df_scored
-            # Store the source file name as an attribute of the DataFrame for comparison
-            st.session_state['scored_data'].attrs['source_file'] = file_to_analyze
-            st.success(f"Analysis complete for '{file_to_analyze}'.")
-            st.rerun() # Force a rerun to display the dashboard with new data
-
-    except Exception as e:
-        st.error(f"Error analyzing file from S3: {e}. Please check file format and column names in your CSV file.")
-        st.write("DEBUG: An error occurred during analysis:", e)
-        st.session_state['scored_data'] = pd.DataFrame() # Clear on error
-        st.session_state['selected_file_for_analysis'] = None # Reset on error
-        st.stop() 
+        except Exception as e:
+            st.error(f"Error analyzing file from S3: {e}. Please check file format and column names in your CSV file.")
+            st.write(f"Detailed error: {e}") # Provide more detailed error to user
+            st.session_state['scored_data'] = pd.DataFrame() # Clear on error
+            st.session_state['analyze_triggered'] = False # Reset trigger
+            st.session_state['selected_file_for_analysis'] = None # Reset on error
+            # No st.stop() here
 
 # --- Display Dashboard Results if scored_data is available ---
 if not st.session_state['scored_data'].empty:
@@ -808,7 +810,6 @@ if not st.session_state['scored_data'].empty:
         st.markdown('<div class="dashboard-card table-card">', unsafe_allow_html=True)
         st.markdown("<h4>Business Overview by Decision</h4>")
         # Aggregate data by Decision for overview
-        # Ensure 'Score', 'TLSum', 'TLBadCnt24' are numeric before aggregation
         overview_df = df_display.groupby('Decision').agg(
             Total_Loans=('ID', 'count'),
             Avg_Score=('Score', 'mean'),
@@ -836,7 +837,6 @@ if not st.session_state['scored_data'].empty:
         st.markdown('<div class="dashboard-card chart-card">', unsafe_allow_html=True)
         st.markdown("<h4>Decision Contribution by Derogatory Count Group</h4>")
         # Create a categorical feature from DerogCnt for pie chart
-        # DerogCnt is already converted to numeric at the top of this block
         df_display['DerogCnt_Group'] = pd.cut(df_display['DerogCnt'], bins=[-1, 0, 1, 5, df_display['DerogCnt'].max()],
                                               labels=['No Derog', '1 Derog', '2-5 Derogs', '>5 Derogs'],
                                               right=True, include_lowest=True)
@@ -864,7 +864,6 @@ if not st.session_state['scored_data'].empty:
         st.markdown("<h4>Average Statistics by Loan Decision (Group 1: Counts & Indicators)</h4>")
         features_group1 = [col for col in GROUP_1_COUNTS_INDICATORS if col in df_display.columns]
         if features_group1:
-            # These columns are already converted to numeric at the top of this block
             df_numeric_for_stats = df_display[features_group1 + ['Decision']]
             summary_stats_group1 = df_numeric_for_stats.groupby('Decision').mean().T.reset_index()
             summary_stats_group1.columns = ['Feature', 'Approved Avg', 'Rejected Avg']
@@ -896,7 +895,6 @@ if not st.session_state['scored_data'].empty:
         st.markdown("<h4>Average Statistics by Loan Decision (Group 2: Time & Percentages)</h4>")
         features_group2 = [col for col in GROUP_2_TIME_PERCENTAGES if col in df_display.columns]
         if features_group2:
-            # These columns are already converted to numeric at the top of this block
             df_numeric_for_stats = df_display[features_group2 + ['Decision']]
             summary_stats_group2 = df_numeric_for_stats.groupby('Decision').mean().T.reset_index()
             summary_stats_group2.columns = ['Feature', 'Approved Avg', 'Rejected Avg']
@@ -924,7 +922,6 @@ if not st.session_state['scored_data'].empty:
         st.markdown("<h4>Average Statistics by Loan Decision (Group 3: Sums & Max Sums)</h4>")
         features_group3 = [col for col in GROUP_3_SUMS_MAXSUMS if col in df_display.columns]
         if features_group3:
-            # These columns are already converted to numeric at the top of this block
             df_numeric_for_stats = df_display[features_group3 + ['Decision']]
             summary_stats_group3 = df_numeric_for_stats.groupby('Decision').mean().T.reset_index()
             summary_stats_group3.columns = ['Feature', 'Approved Avg', 'Rejected Avg']
