@@ -1,15 +1,13 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import boto3
 import io
 import datetime
 import os
 import time
-import json
-import requests # For making HTTP requests to the LLM API
-import boto3 # Ensure boto3 is imported
 
-# --- Import scikit-learn components ---
+# Import scikit-learn components
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.neural_network import MLPClassifier 
@@ -236,70 +234,6 @@ def get_credit_score_ml(df_input: pd.DataFrame, approval_threshold: int, actual_
     return pd.DataFrame({'Score': scores, 'Decision': decisions})
 
 
-# --- LLM Integration for Explanations ---
-def get_llm_explanation(features_dict: dict, score: float, decision: str):
-    """
-    Calls an OpenAI LLM to get an explanation for a loan decision using requests.
-    """
-    prompt = f"""
-    You are an expert credit risk analyst. Based on the following loan application features, 
-    explain concisely why this loan received a score of {score:.2f} and was {decision}.
-    Focus on 2-3 key factors from the provided features that likely influenced the decision.
-    
-    Loan Features:
-    {json.dumps(features_dict, indent=2)}
-    
-    Provide a brief, clear explanation (max 50 words).
-    """
-    
-    try:
-        # Get OpenAI API key from Streamlit secrets, accessing the nested structure
-        openai_api_key = st.secrets["openai"]["api_key"]
-        
-        # OpenAI API endpoint for chat completions
-        apiUrl = "https://api.openai.com/v1/chat/completions"
-        
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {openai_api_key}"
-        }
-        
-        payload = {
-            "model": "gpt-3.5-turbo", # You can change this to 'gpt-4' or other models if available
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 100, # Limit response length
-            "temperature": 0.7 # Control creativity
-        }
-        
-        response = requests.post(
-            apiUrl,
-            headers=headers,
-            json=payload
-        )
-        response.raise_for_status() # Raise an exception for HTTP errors (e.g., 4xx or 5xx)
-        
-        result = response.json()
-        
-        # OpenAI response parsing
-        if result and result.get('choices') and len(result['choices']) > 0 and \
-           result['choices'][0].get('message') and result['choices'][0]['message'].get('content'):
-            return result['choices'][0]['message']['content']
-        else:
-            return "LLM could not generate an explanation."
-    except KeyError:
-        st.error("OpenAI API Key not found in Streamlit secrets. Please ensure 'openai.api_key' is set in your secrets.toml or Streamlit Cloud secrets.")
-        return "Failed to get explanation from LLM (API Key missing or incorrectly configured)."
-    except requests.exceptions.RequestException as e:
-        st.error(f"Error calling LLM for explanation: {e}")
-        return "Failed to get explanation from LLM."
-    except json.JSONDecodeError:
-        st.error("Failed to decode JSON response from LLM API.")
-        return "Failed to get explanation from LLM (JSON decode error)."
-    except Exception as e:
-        st.error(f"An unexpected error occurred while calling LLM: {e}")
-        return "Failed to get explanation from LLM."
-
-
 # --- Streamlit App Layout ---
 st.set_page_config(page_title="Credit Scoring Dashboard", layout="wide")
 
@@ -313,7 +247,6 @@ s3_bucket_name = None
 aws_region_name = None
 
 try:
-    # Initialize real boto3 client
     aws_access_key = st.secrets["aws"]["access_key_id"]
     aws_secret_key = st.secrets["aws"]["secret_access_key"]
     s3_bucket_name = st.secrets["aws"]["s3_bucket_name"]
@@ -385,6 +318,60 @@ except Exception as e:
     st.sidebar.warning(f"Could not list files from S3 bucket: {e}. Ensure 'uploads/' prefix exists or bucket is not empty, and permissions are correct.")
     s3_files = []
 
+# --- Function to encapsulate analysis logic ---
+def perform_analysis(file_to_analyze, actual_target_col_name, s3_client, s3_bucket_name):
+    """
+    Performs the credit data analysis, including downloading, scoring, and updating session state.
+    """
+    if not actual_target_col_name:
+        st.error("No target column selected. Please select one from the dropdown.")
+        st.session_state['scored_data'] = pd.DataFrame() # Clear data on error
+        return # Exit the function
+
+    try:
+        with st.spinner(f"Downloading and analyzing '{file_to_analyze}' from S3..."):
+            obj = s3_client.get_object(Bucket=s3_bucket_name, Key=file_to_analyze)
+            df = pd.read_csv(io.BytesIO(obj['Body'].read()))
+            st.write(f"DEBUG: Original columns in loaded CSV: {df.columns.tolist()}")
+
+            # --- CRITICAL FIX: Handle duplicate column name from CSV ---
+            if 'TLDel60Cnt24.1' in df.columns:
+                st.write("DEBUG: Dropping duplicate column 'TLDel60Cnt24.1' found in uploaded CSV.")
+                df = df.drop(columns=['TLDel60Cnt24.1'])
+
+            # Ensure 'ID' column exists for merging later
+            if 'ID' not in df.columns:
+                df['ID'] = df.index.astype(str) + '_idx'
+            else:
+                df['ID'] = df['ID'].astype(str) # Ensure ID is string type
+
+            # Convert target column to numeric and handle NaNs
+            if actual_target_col_name in df.columns:
+                df[actual_target_col_name] = pd.to_numeric(df[actual_target_col_name], errors='coerce').fillna(0).astype(int)
+            else:
+                st.error(f"The selected target column '{actual_target_col_name}' was not found in the uploaded data. Please check your CSV and select the correct column.")
+                st.session_state['scored_data'] = pd.DataFrame() # Clear on error
+                return # Exit the function if target column is missing
+
+            st.write(f"DEBUG: DataFrame columns before passing to ML scoring: {df.columns.tolist()}")
+            results_df = get_credit_score_ml(df.copy(), st.session_state['approval_threshold'], actual_target_col_name)
+            st.write(f"DEBUG: Results DataFrame from ML scoring: {results_df.head()}")
+
+            # Reorder columns to have ID first, then original columns, then Score and Decision
+            if 'ID' in df.columns:
+                cols = ['ID'] + [col for col in df.columns if col != 'ID']
+                df = df[cols]
+
+            df_scored = pd.concat([df, results_df], axis=1)
+            st.session_state['scored_data'] = df_scored
+            st.success(f"Analysis complete for '{file_to_analyze}'.")
+            st.write(f"DEBUG: Final scored_data shape after analysis: {st.session_state['scored_data'].shape}")
+
+    except Exception as e:
+        st.error(f"Error analyzing file from S3: {e}. Please check file format and column names in your CSV file.")
+        st.write(f"Detailed error: {e}") # Provide more detailed error to user
+        st.session_state['scored_data'] = pd.DataFrame() # Clear on error
+
 # --- Analysis Trigger Form ---
 with st.sidebar.form("analysis_trigger_form"):
     st.markdown("### Select File for Analysis")
@@ -443,60 +430,8 @@ with st.sidebar.form("analysis_trigger_form"):
 
     if analyze_submitted:
         if selected_s3_file_in_form and st.session_state['selected_target_column']:
-            file_to_analyze = selected_s3_file_in_form
-            actual_target_col_name = st.session_state['selected_target_column']
-
-            if not actual_target_col_name:
-                st.error("No target column selected. Please select one from the dropdown.")
-                st.session_state['scored_data'] = pd.DataFrame() # Clear on error
-                st.rerun() # Rerun to clear state and show error
-            else:
-                try:
-                    with st.spinner(f"Downloading and analyzing '{file_to_analyze}' from S3..."):
-                        obj = s3_client.get_object(Bucket=s3_bucket_name, Key=file_to_analyze)
-                        df = pd.read_csv(io.BytesIO(obj['Body'].read()))
-                        st.write(f"DEBUG: Original columns in loaded CSV: {df.columns.tolist()}")
-
-                        # --- CRITICAL FIX: Handle duplicate column name from CSV ---
-                        if 'TLDel60Cnt24.1' in df.columns:
-                            st.write("DEBUG: Dropping duplicate column 'TLDel60Cnt24.1' found in uploaded CSV.")
-                            df = df.drop(columns=['TLDel60Cnt24.1'])
-
-
-                        # Ensure 'ID' column exists for merging later
-                        if 'ID' not in df.columns:
-                            df['ID'] = df.index.astype(str) + '_idx'
-                        else:
-                            df['ID'] = df['ID'].astype(str) # Ensure ID is string type
-
-                        # Convert target column to numeric and handle NaNs
-                        if actual_target_col_name in df.columns:
-                            df[actual_target_col_name] = pd.to_numeric(df[actual_target_col_name], errors='coerce').fillna(0).astype(int)
-                        else:
-                            st.error(f"The selected target column '{actual_target_col_name}' was not found in the uploaded data. Please check your CSV and select the correct column.")
-                            st.session_state['scored_data'] = pd.DataFrame() # Clear on error
-                            st.rerun() # Rerun to clear state and show error
-                            
-                        st.write(f"DEBUG: DataFrame columns before passing to ML scoring: {df.columns.tolist()}")
-                        results_df = get_credit_score_ml(df.copy(), st.session_state['approval_threshold'], actual_target_col_name)
-                        st.write(f"DEBUG: Results DataFrame from ML scoring: {results_df.head()}")
-
-                        # Reorder columns to have ID first, then original columns, then Score and Decision
-                        if 'ID' in df.columns:
-                            cols = ['ID'] + [col for col in df.columns if col != 'ID']
-                            df = df[cols]
-
-                        df_scored = pd.concat([df, results_df], axis=1)
-                        st.session_state['scored_data'] = df_scored
-                        st.success(f"Analysis complete for '{file_to_analyze}'.")
-                        st.write(f"DEBUG: Final scored_data shape after analysis: {st.session_state['scored_data'].shape}")
-                        st.rerun() # Force a rerun to display the dashboard with new data
-
-                except Exception as e:
-                    st.error(f"Error analyzing file from S3: {e}. Please check file format and column names in your CSV file.")
-                    st.write(f"Detailed error: {e}") # Provide more detailed error to user
-                    st.session_state['scored_data'] = pd.DataFrame() # Clear on error
-                    st.rerun() # Rerun to clear state and show error
+            perform_analysis(selected_s3_file_in_form, st.session_state['selected_target_column'], s3_client, s3_bucket_name)
+            st.rerun() # Force a rerun to display the dashboard with new data
         else:
             st.sidebar.warning("Please select a file and a target column to analyze.")
 
@@ -604,41 +539,6 @@ if not st.session_state['scored_data'].empty:
     st.subheader("Scored Credit Data")
     st.dataframe(df_display)
 
-    st.markdown("---")
-    st.header("AI-Powered Explanations for Rejected Loans")
-    st.info("Click on a rejected loan's ID to get an AI-generated explanation for the decision.")
-
-    vulnerable_loans = df_display[df_display['Decision'] == 'Rejected'].sort_values(by='Score', ascending=True)
-
-    if not vulnerable_loans.empty:
-        for index, row in vulnerable_loans.iterrows():
-            loan_id = row['ID']
-            score = row['Score']
-            decision = row['Decision']
-            
-            # Prepare features for LLM explanation
-            loan_features = {}
-            # Iterate over all defined features to ensure consistency
-            all_relevant_features = NUMERICAL_FEATURES + CATEGORICAL_FEATURES
-            for feature_name in all_relevant_features:
-                if feature_name in row: # Check if the feature exists in the current row
-                    value = row[feature_name]
-                    if feature_name in NUMERICAL_FEATURES:
-                        # Ensure numerical values are correctly handled, including NaNs
-                        loan_features[feature_name] = pd.to_numeric(value, errors='coerce').fillna(0)
-                    else:
-                        # Ensure categorical values are strings and handle potential NaNs
-                        loan_features[feature_name] = str(value).replace('nan', 'missing_category')
-            # Remove any features that might still be NaN or None after processing, if desired
-            loan_features = {k: v for k, v in loan_features.items() if pd.notna(v) and v is not None}
-
-            with st.expander(f"Explain why Loan ID: **{loan_id}** (Score: {score:.2f}, Decision: {decision}) was rejected"):
-                with st.spinner(f"Generating explanation for {loan_id}..."):
-                    explanation = get_llm_explanation(loan_features, score, decision)
-                    st.markdown(explanation)
-    else:
-        st.info("No rejected loans to generate explanations for at the current threshold.")
-
 else:
     st.info("Upload a CSV file and click 'Analyze' to view the dashboard.")
     st.write("DEBUG: scored_data is empty, so dashboard is not displayed.")
@@ -658,7 +558,7 @@ st.markdown(
     * **Authentication & Authorization (Cognito):** For secure user access to the app and S3, ensuring only authorized users can upload or view sensitive data.
     * **Logging & Monitoring (CloudWatch):** To track app performance, S3 interactions, and potential errors, providing insights for operational management.
 
-    ### 🧠 Large Language Model (LLM) Integration:
-    The LLM (currently OpenAI's GPT-3.5-turbo) is used to provide **Explainable AI (XAI)**. After identifying rejected applicants, the LLM generates concise, human-readable explanations for *why* specific applicants were flagged as high-risk, based on their input features. This helps in understanding and communicating complex model decisions.
+    ### 🧠 Large Language Model (LLM) Integration (Conceptual):
+    While not directly implemented in this version, an LLM could be used to provide **Explainable AI (XAI)**. After identifying rejected applicants, an LLM could generate concise, human-readable explanations for *why* specific applicants were flagged as high-risk, based on their input features. This helps in understanding and communicating complex model decisions.
     """
 )
