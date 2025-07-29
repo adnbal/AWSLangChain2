@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import io
 import json
 import requests
 import random
@@ -59,7 +58,7 @@ def get_model_pipeline():
 
 model_pipeline = get_model_pipeline()
 
-# --- Score Function ---
+# --- Scoring Function ---
 def get_credit_score_ml(df_input, approval_threshold):
     df = df_input.copy()
     missing_cols = [f for f in NUMERICAL_FEATURES if f not in df.columns]
@@ -148,9 +147,7 @@ if not st.session_state['scored_data'].empty:
                'TLCnt03', 'TLCnt12', 'TLCnt24', 'TLCnt', 'TLSatCnt', 'TLDel60Cnt', 'TLBadCnt24',
                'TL75UtilCnt', 'TL50UtilCnt', 'TLDel3060Cnt24', 'TLDel90Cnt24', 'TLDel60CntAll',
                'TLBadDerogCnt', 'TLDel60Cnt24']
-
     group_2 = ['InqTimeLast', 'TLTimeLast', 'TLBalHCPct', 'TLSatPct', 'TLOpenPct', 'TLOpen24Pct']
-
     group_3 = ['TLSum', 'TLMaxSum']
 
     def plot_group(features, title):
@@ -171,18 +168,43 @@ if not st.session_state['scored_data'].empty:
     plot_group(group_2, "Average Time & Percentage Features by Loan Decision")
     plot_group(group_3, "Average Monetary Features by Loan Decision")
 
-    # --- Top & Bottom Scores (Ordered Horizontal) ---
+    # --- Improved Top & Bottom Scores ---
     st.markdown("---")
     st.subheader("Top & Bottom Scores Analysis")
 
-    top_scores = df_display.sort_values(by="Score", ascending=False).head(10).sort_values(by="Score", ascending=True)
-    fig_top = px.bar(top_scores, x="Score", y="ID", orientation="h", title="Top 10 Highest Credit Scores", color="Score", text="Score")
-    fig_top.update_traces(texttemplate='%{text:.2f}', textposition='outside')
+    top_scores = df_display.sort_values(by="Score", ascending=False).head(10)
+    bottom_scores = df_display.sort_values(by="Score", ascending=True).head(10)
+
+    # Top Scores Chart
+    fig_top = px.bar(
+        top_scores.sort_values(by="Score", ascending=True),
+        x="Score", y="ID",
+        orientation="h",
+        title="Top 10 Highest Credit Scores",
+        text="Score"
+    )
+    fig_top.update_traces(texttemplate='%{text:.2f}', textposition='inside', marker_color='green')
+    fig_top.update_layout(
+        xaxis_title="Credit Score", yaxis_title="Applicant ID",
+        plot_bgcolor="#111", paper_bgcolor="#111",
+        font=dict(color="white"), xaxis=dict(showgrid=False), yaxis=dict(showgrid=False)
+    )
     st.plotly_chart(fig_top, use_container_width=True)
 
-    bottom_scores = df_display.sort_values(by="Score", ascending=True).head(10)
-    fig_bottom = px.bar(bottom_scores.sort_values(by="Score", ascending=False), x="Score", y="ID", orientation="h", title="Top 10 Lowest Credit Scores", color="Score", text="Score")
-    fig_bottom.update_traces(texttemplate='%{text:.2f}', textposition='outside')
+    # Bottom Scores Chart
+    fig_bottom = px.bar(
+        bottom_scores.sort_values(by="Score", ascending=True),
+        x="Score", y="ID",
+        orientation="h",
+        title="Top 10 Lowest Credit Scores",
+        text="Score"
+    )
+    fig_bottom.update_traces(texttemplate='%{text:.2f}', textposition='inside', marker_color='red')
+    fig_bottom.update_layout(
+        xaxis_title="Credit Score", yaxis_title="Applicant ID",
+        plot_bgcolor="#111", paper_bgcolor="#111",
+        font=dict(color="white"), xaxis=dict(showgrid=False), yaxis=dict(showgrid=False)
+    )
     st.plotly_chart(fig_bottom, use_container_width=True)
 
     # --- Summary Statistics ---
