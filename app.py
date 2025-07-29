@@ -969,10 +969,20 @@ if 'scored_data' in st.session_state and not st.session_state['scored_data'].emp
             score = row['Score']
             decision = row['Decision']
             
-            # Ensure features passed to LLM are numeric where expected
-            loan_features = row[NUMERICAL_FEATURES + CATEGORICAL_FEATURES].apply(
-                lambda x: pd.to_numeric(x, errors='coerce').fillna(0) if x.name in NUMERICAL_FEATURES else x
-            ).dropna().to_dict()
+            # --- FIX: Reconstructed loan_features to avoid AttributeError ---
+            loan_features = {}
+            all_relevant_features = NUMERICAL_FEATURES + CATEGORICAL_FEATURES
+            for feature_name in all_relevant_features:
+                if feature_name in row:
+                    value = row[feature_name]
+                    if feature_name in NUMERICAL_FEATURES:
+                        # Ensure numerical values are correctly handled, including NaNs
+                        loan_features[feature_name] = pd.to_numeric(value, errors='coerce').fillna(0)
+                    else:
+                        # Ensure categorical values are strings and handle potential NaNs
+                        loan_features[feature_name] = str(value).replace('nan', 'missing_category')
+            # Remove any features that might still be NaN or None after processing, if desired
+            loan_features = {k: v for k, v in loan_features.items() if pd.notna(v) and v is not None}
 
             with st.expander(f"Explain why Loan ID: **{loan_id}** (Score: {score:.2f}, Decision: {decision}) was rejected"):
                 with st.spinner(f"Generating explanation for {loan_id}..."):
