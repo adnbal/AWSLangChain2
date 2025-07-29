@@ -3,11 +3,10 @@ import pandas as pd
 import numpy as np
 import boto3
 import io
-import datetime # For unique file naming
+import datetime
 import os
-import time # For a small delay
-import json # For parsing LLM structured output
-import asyncio # For running async functions in a synchronous context
+import time
+import json
 import requests # For making HTTP requests to the LLM API
 
 # Import scikit-learn components
@@ -304,18 +303,95 @@ def get_llm_explanation(features_dict: dict, score: float, decision: str):
 # --- Streamlit UI Configuration ---
 st.set_page_config(page_title="Credit Scoring Dashboard with S3", layout="wide")
 
-# Custom CSS for styling the Streamlit app
+# Custom CSS for styling the Streamlit app to match the dark theme and card layout
 st.markdown(
     """
     <style>
-    .main {
-        background-color: #f0f2f6;
-        padding: 20px;
-        border-radius: 10px;
-        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    /* Overall Dark Theme */
+    body {
+        background-color: #1a1a2e; /* Dark blue background */
+        color: #e0e0e0; /* Light grey text */
+        font-family: 'Inter', sans-serif; /* Use Inter font */
     }
+    .main {
+        background-color: #1a1a2e; /* Dark blue background for main content */
+        padding: 0px; /* Remove padding from main to allow full width cards */
+    }
+    .stApp {
+        background-color: #1a1a2e; /* Ensure app background is dark */
+    }
+
+    /* Header and Subheader Styling */
+    h1, h2, h3, h4, h5, h6 {
+        color: #e0e0e0; /* Light grey for all headers */
+    }
+    .stMarkdown h1 {
+        text-align: center;
+        color: #e0e0e0;
+        padding-top: 20px;
+        padding-bottom: 10px;
+    }
+    .stMarkdown h2, .stMarkdown h3 {
+        padding-top: 15px;
+        padding-bottom: 5px;
+    }
+
+    /* Card Styling */
+    .dashboard-card {
+        background-color: #2a2a4a; /* Slightly lighter dark blue for cards */
+        border-radius: 12px; /* Rounded corners */
+        padding: 20px;
+        margin: 10px; /* Space between cards */
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3); /* Soft shadow */
+        border: 1px solid #3f3f6f; /* Subtle border */
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        min-height: 180px; /* Ensure cards have a minimum height */
+    }
+    .metric-card {
+        min-height: 150px; /* Smaller height for top row metric cards */
+    }
+    .chart-card {
+        min-height: 300px; /* Taller height for chart cards */
+    }
+    .table-card {
+        min-height: 350px; /* Taller height for table cards */
+    }
+
+    /* Metric Value Display */
+    .metric-value {
+        font-size: 2.2em;
+        font-weight: bold;
+        color: #6a8dff; /* Blue for primary metrics */
+        margin-bottom: 5px;
+    }
+    .metric-change {
+        font-size: 0.9em;
+        color: #a0a0a0; /* Grey for secondary info */
+    }
+    .positive-change {
+        color: #4CAF50; /* Green for positive change */
+    }
+    .negative-change {
+        color: #f44336; /* Red for negative change */
+    }
+    .metric-title {
+        font-size: 1.1em;
+        font-weight: bold;
+        color: #e0e0e0;
+        margin-bottom: 10px;
+    }
+    .info-icon {
+        float: right;
+        color: #a0a0a0;
+        font-size: 0.9em;
+        cursor: pointer;
+    }
+
+    /* Streamlit Widget Styling */
     .stButton>button {
-        background-color: #4CAF50;
+        background-color: #6a8dff; /* Blue for buttons */
         color: white;
         padding: 10px 20px;
         border-radius: 8px;
@@ -324,73 +400,143 @@ st.markdown(
         transition: all 0.3s ease;
     }
     .stButton>button:hover {
-        background-color: #45a049;
+        background-color: #537be6;
         transform: translateY(-2px);
     }
-    .stTextInput>div>div>input {
+    .stTextInput>div>div>input, .stSelectbox>div>div {
+        background-color: #3f3f6f; /* Darker background for inputs */
+        color: #e0e0e0;
         border-radius: 8px;
-        border: 1px solid #ccc;
+        border: 1px solid #5a5a8a;
         padding: 8px;
     }
-    .stSelectbox>div>div {
+    .stSlider>div>div>div>div {
+        background-color: #6a8dff; /* Blue for slider track */
+    }
+    .stSlider [data-baseweb="slider"] {
+        background-color: #3f3f6f; /* Darker background for slider rail */
+    }
+    .stRadio > label {
+        color: #e0e0e0; /* Radio button labels */
+    }
+
+    /* Info/Success/Warning Boxes */
+    .stAlert {
         border-radius: 8px;
-        border: 1px solid #ccc;
-        padding: 8px;
     }
-    .stHeader {
-        color: #2c3e50;
-        text-align: center;
+    .stAlert.info {
+        background-color: #2a2a4a;
+        color: #6a8dff;
+        border-left: 5px solid #6a8dff;
     }
-    .stSubheader {
-        color: #34495e;
+    .stAlert.success {
+        background-color: #2a2a4a;
+        color: #4CAF50;
+        border-left: 5px solid #4CAF50;
     }
-    .score-box {
-        background-color: #e8f5e9;
-        border: 2px solid #4CAF50;
-        border-radius: 10px;
-        padding: 15px;
-        margin-top: 20px;
-        text-align: center;
-        font-size: 1.2em;
-        font-weight: bold;
-        color: #2e7d32;
+    .stAlert.warning {
+        background-color: #2a2a4a;
+        color: #FFC107;
+        border-left: 5px solid #FFC107;
     }
-    .decision-approved {
-        background-color: #e8f5e9;
-        border: 2px solid #4CAF50;
-        color: #2e7d32;
-        padding: 10px;
-        border-radius: 8px;
-        margin-top: 10px;
-        text-align: center;
-        font-size: 1.5em;
-        font-weight: bold;
+    .stAlert.error {
+        background-color: #2a2a4a;
+        color: #f44336;
+        border-left: 5px solid #f44336;
     }
-    .decision-rejected {
-        background-color: #ffebee;
-        border: 2px solid #f44336;
-        color: #c62828;
-        padding: 10px;
-        border-radius: 8px;
-        margin-top: 10px;
-        font-size: 1.5em;
-        font-weight: bold;
-        text-align: center;
+
+    /* Plotly Chart Background */
+    .js-plotly-plot {
+        background-color: #2a2a4a !important; /* Match card background */
+        border-radius: 12px; /* Apply border-radius to plot area */
+    }
+    .modebar {
+        background-color: #2a2a4a !important; /* Match card background */
+        border-radius: 0 0 12px 12px; /* Rounded bottom corners */
     }
     </style>
-    """
+    """,
+    unsafe_allow_html=True
 )
 
-st.title("Credit Risk Dashboard (Powered by Neural Network with Adjustable Threshold!)") 
-st.subheader("Upload Credit Data and Analyze Risk") 
+# --- Helper function to create a styled card ---
+def create_card(title, content, card_type="dashboard-card"):
+    st.markdown(f'<div class="{card_type}"><h3>{title}</h3>{content}</div>', unsafe_allow_html=True)
 
-# --- Initialize S3 Client ---
+# --- Helper function for metric cards ---
+def create_metric_card(title, current_value, prev_value, unit="", is_percentage=False, chart_data=None, chart_y_col=None):
+    if prev_value is not None and prev_value != 0:
+        change = ((current_value - prev_value) / prev_value) * 100
+        change_text = f"{change:.2f}%"
+        change_class = "positive-change" if change >= 0 else "negative-change"
+        arrow = "▲" if change >= 0 else "▼"
+    else:
+        change_text = "N/A"
+        change_class = ""
+        arrow = ""
+
+    current_display = f"{current_value:.2f}{unit}" if not is_percentage else f"{current_value:.2f}%"
+    prev_display = f"{prev_value:.2f}{unit}" if not is_percentage else f"{prev_value:.2f}%"
+
+    card_content = f"""
+    <div class="metric-title">{title} <span class="info-icon">ⓘ</span></div>
+    <div class="metric-value">{current_display}</div>
+    <div class="metric-change">
+        <span class="{change_class}">{arrow} {change_text}</span> vs {prev_display}
+    </div>
+    """
+    
+    # Add a placeholder for a sparkline chart if data is provided
+    if chart_data is not None and chart_y_col is not None:
+        # Create a tiny Plotly chart for the sparkline effect
+        fig = px.line(
+            chart_data, 
+            y=chart_y_col, 
+            height=50, 
+            width=200, # Adjust width to fit card
+            template="plotly_dark"
+        )
+        fig.update_layout(
+            margin=dict(l=0, r=0, t=0, b=0),
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)',
+            showlegend=False,
+            xaxis_visible=False,
+            yaxis_visible=False,
+            hovermode=False,
+            transition_duration=300
+        )
+        fig.update_traces(mode='lines', line=dict(width=2, color='#6a8dff')) # Blue line
+        
+        # Convert to HTML and embed
+        chart_html = fig.to_html(full_html=False, include_plotlyjs='cdn')
+        card_content += f'<div style="width: 100%; overflow: hidden;">{chart_html}</div>'
+
+    st.markdown(f'<div class="dashboard-card metric-card">{card_content}</div>', unsafe_allow_html=True)
+
+
+# --- Dashboard Header ---
+st.markdown(
+    """
+    <div style="background-color: #0f0f20; padding: 15px 20px; border-radius: 12px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center;">
+        <h2 style="color: #e0e0e0; margin: 0;">Credit Risk Analysis Dashboard</h2>
+        <div>
+            <button style="background-color: #6a8dff; color: white; padding: 8px 15px; border-radius: 8px; border: none; margin-left: 10px;">Synopsis</button>
+            <button style="background-color: #6a8dff; color: white; padding: 8px 15px; border-radius: 8px; border: none; margin-left: 10px;">Regional Analysis</button>
+            <button style="background-color: #6a8dff; color: white; padding: 8px 15px; border-radius: 8px; border: none; margin-left: 10px;">Orders</button>
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
+# --- File Upload and S3 Integration ---
+st.sidebar.header("Data Management")
 s3_client = None
 s3_bucket_name = None
 aws_region_name = None
 
 try:
-    # Accessing secrets as nested keys, matching your Streamlit Cloud config
     aws_access_key = st.secrets["aws"]["access_key_id"]
     aws_secret_key = st.secrets["aws"]["secret_access_key"]
     s3_bucket_name = st.secrets["aws"]["s3_bucket_name"]
@@ -404,9 +550,10 @@ try:
     )
     st.sidebar.success("AWS S3 client initialized!")
 
-    st.sidebar.header("Application Secrets")
-    st.sidebar.write(f"AWS Access Key ID: `{aws_access_key[:4]}...`")
-    st.sidebar.write(f"AWS Secret Access Key: `{aws_secret_key[:4]}...`")
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("AWS Secrets Status:")
+    st.sidebar.write(f"AWS Access Key ID: `{'*' * (len(aws_access_key) - 4)}{aws_access_key[-4:]}`")
+    st.sidebar.write(f"AWS Secret Access Key: `{'*' * (len(aws_secret_key) - 4)}{aws_secret_key[-4:]}`")
     st.sidebar.write(f"S3 Bucket Name: `{s3_bucket_name}`")
     st.sidebar.write(f"AWS Region: `{aws_region_name}`")
 
@@ -417,13 +564,11 @@ except Exception as e:
     st.sidebar.error(f"An error occurred while initializing S3 client: {e}")
     st.stop()
 
-# --- Callback function to clear the file uploader ---
 def clear_file_uploader():
     st.session_state['file_uploader_key'] += 1
 
-# --- File Upload Section ---
-st.header("Upload Credit Data to S3") 
-uploaded_file = st.file_uploader(
+st.sidebar.subheader("Upload Credit Data to S3") 
+uploaded_file = st.sidebar.file_uploader(
     "Choose a CSV file (.csv)", 
     type=["csv"], 
     key=f"file_uploader_{st.session_state['file_uploader_key']}" 
@@ -437,21 +582,20 @@ if uploaded_file is not None:
     try:
         with st.spinner(f"Uploading {file_name} to S3..."):
             s3_client.upload_fileobj(uploaded_file, s3_bucket_name, s3_file_key)
-        st.success(f"File '{file_name}' uploaded successfully to S3 as '{s3_file_key}'!")
+        st.sidebar.success(f"File '{file_name}' uploaded successfully to S3 as '{s3_file_key}'!")
         st.session_state['last_uploaded_s3_key'] = s3_file_key
         st.session_state['analyze_triggered'] = False 
         st.session_state['scored_data'] = pd.DataFrame() 
-        st.info("File uploaded. Please select it from the dropdown below and click 'Analyze'.")
+        st.sidebar.info("File uploaded. Please select it from the dropdown below and click 'Analyze'.")
         time.sleep(1) 
 
         clear_file_uploader() 
         st.rerun() 
 
     except Exception as e:
-        st.error(f"Error uploading file to S3: {e}")
+        st.sidebar.error(f"Error uploading file to S3: {e}")
 
-# --- Dashboard Section for Analysis Trigger (Encapsulated in a Form) ---
-st.header("Analyze Credit Data from S3") 
+st.sidebar.subheader("Analyze Credit Data from S3") 
 
 s3_files = []
 try:
@@ -461,11 +605,10 @@ try:
             s3_files = [obj['Key'] for obj in response['Contents'] if obj['Key'].endswith('.csv')] 
             s3_files.sort(reverse=True)
 except Exception as e:
-    st.warning(f"Could not list files from S3 bucket: {e}. Ensure 'uploads/' prefix exists or bucket is not empty, and permissions are correct.")
+    st.sidebar.warning(f"Could not list files from S3 bucket: {e}. Ensure 'uploads/' prefix exists or bucket is not empty, and permissions are correct.")
     s3_files = []
 
-# --- Use a form to encapsulate the file selection and analysis trigger ---
-with st.form("analysis_trigger_form"):
+with st.sidebar.form("analysis_trigger_form"):
     st.markdown("### Select File for Analysis")
     
     selected_s3_file_in_form = None
@@ -486,7 +629,6 @@ with st.form("analysis_trigger_form"):
     else:
         st.info("No CSV files found in the 'uploads/' folder of your S3 bucket. Please upload one above.")
 
-    # Target Column Selector (only show if a file is selected)
     if selected_s3_file_in_form:
         try:
             temp_obj = s3_client.get_object(Bucket=s3_bucket_name, Key=selected_s3_file_in_form)
@@ -494,11 +636,10 @@ with st.form("analysis_trigger_form"):
             st.session_state['uploaded_df_columns'] = temp_df.columns.tolist()
             
             default_target_idx = 0
-            # Check for 'default' (lowercase)
             if TARGET_COLUMN in st.session_state['uploaded_df_columns']:
                 default_target_idx = st.session_state['uploaded_df_columns'].index(TARGET_COLUMN)
             elif len(st.session_state['uploaded_df_columns']) > 0:
-                st.warning(f"Default target column '{TARGET_COLUMN}' not found. Please select the correct target column.")
+                st.sidebar.warning(f"Default target column '{TARGET_COLUMN}' not found. Please select the correct target column.")
                 default_target_idx = 0 
             
             st.session_state['selected_target_column'] = st.selectbox(
@@ -508,29 +649,33 @@ with st.form("analysis_trigger_form"):
                 key="target_column_selector"
             )
         except Exception as e:
-            st.error(f"Error reading selected file to get columns for target selector: {e}")
+            st.sidebar.error(f"Error reading selected file to get columns for target selector: {e}")
             st.session_state['uploaded_df_columns'] = [] 
             st.session_state['selected_target_column'] = '' 
     else:
-        st.session_state['uploaded_df_columns'] = [] # Clear columns if no file selected
-        st.session_state['selected_target_column'] = '' # Clear selected target
+        st.session_state['uploaded_df_columns'] = [] 
+        st.session_state['selected_target_column'] = '' 
 
-    # This is the button that submits the form and triggers analysis
     analyze_submitted = st.form_submit_button(f"Analyze Selected File")
 
     if analyze_submitted:
         if selected_s3_file_in_form and st.session_state['selected_target_column']:
-            st.write(f"DEBUG: Analyze form submitted. Selected file: `{selected_s3_file_in_form}`. Target column: `{st.session_state['selected_target_column']}`. Starting analysis...")
             st.session_state['selected_file_for_analysis'] = selected_s3_file_in_form 
             st.session_state['analyze_triggered'] = True 
             st.rerun() 
         else:
-            st.warning("Please select a file and a target column to analyze.")
+            st.sidebar.warning("Please select a file and a target column to analyze.")
             st.session_state['analyze_triggered'] = False
-    else:
-        st.write("DEBUG: Analysis form not yet submitted.")
 
-# --- Perform Analysis if Triggered ---
+if st.session_state['scored_data'] is not None and not st.session_state['scored_data'].empty:
+    if st.sidebar.button("Clear Displayed Data", key="clear_data_button_sidebar"):
+        st.session_state['scored_data'] = pd.DataFrame()
+        st.session_state['analyze_triggered'] = False
+        st.session_state['selected_file_for_analysis'] = None
+        st.sidebar.success("Displayed data cleared.")
+        st.rerun() 
+
+# --- Main Dashboard Content ---
 if st.session_state['analyze_triggered'] and st.session_state['selected_file_for_analysis']:
     file_to_analyze = st.session_state['selected_file_for_analysis']
     actual_target_col_name = st.session_state['selected_target_column']
@@ -541,29 +686,18 @@ if st.session_state['analyze_triggered'] and st.session_state['selected_file_for
         st.session_state['selected_file_for_analysis'] = None
         st.stop()
 
-    st.write(f"DEBUG: Analysis triggered via session state for file: `{file_to_analyze}` with target column `{actual_target_col_name}`.")
     try:
         with st.spinner(f"Downloading and analyzing '{file_to_analyze}' from S3..."):
             obj = s3_client.get_object(Bucket=s3_bucket_name, Key=file_to_analyze)
             df = pd.read_csv(io.BytesIO(obj['Body'].read())) 
-            st.write(f"DEBUG: Successfully read {len(df)} rows from CSV file.")
-            st.write("DEBUG: Columns in loaded CSV file:", df.columns.tolist()) 
 
-            # Ensure 'ID' column is string type for plotting if it exists
-            # If 'ID' column is not present, create a unique identifier from index for plotting
             if 'ID' not in df.columns:
                 df['ID'] = df.index.astype(str) + '_idx'
-                st.write("DEBUG: 'ID' column not found, created unique IDs from index.")
             else:
                 df['ID'] = df['ID'].astype(str)
-                st.write("DEBUG: 'ID' column processed to string type.")
 
-            st.write("DEBUG: Columns in df after ID processing:", df.columns.tolist()) 
-
-            # Ensure the selected target column is present and is integer type for classification
             if actual_target_col_name in df.columns:
                 df[actual_target_col_name] = pd.to_numeric(df[actual_target_col_name], errors='coerce').fillna(0).astype(int)
-                st.write(f"DEBUG: '{actual_target_col_name}' column processed to integer type.")
             else:
                 st.error(f"The selected target column '{actual_target_col_name}' was not found in the uploaded data. Please check your CSV and select the correct column.")
                 st.session_state['scored_data'] = pd.DataFrame()
@@ -571,270 +705,258 @@ if st.session_state['analyze_triggered'] and st.session_state['selected_file_for
                 st.session_state['selected_file_for_analysis'] = None
                 st.stop() 
 
-            # Pass the actual_target_col_name to the scoring function
             results_df = get_credit_score_ml(df.copy(), st.session_state['approval_threshold'], actual_target_col_name) 
             
-            # More robust way to ensure 'ID' is the first column for display
             if 'ID' in df.columns:
-                # Get all columns, put 'ID' first, then the rest
                 cols = ['ID'] + [col for col in df.columns if col != 'ID']
                 df = df[cols]
-                st.write("DEBUG: 'ID' column moved to front of DataFrame.")
 
             df_scored = pd.concat([df, results_df], axis=1)
-            st.write(f"DEBUG: Columns in df_scored before dashboard display:", df_scored.columns.tolist()) 
-            st.write(f"DEBUG: Scored data has {len(df_scored)} rows.")
-
             st.session_state['scored_data'] = df_scored
             st.success(f"Analysis complete for '{file_to_analyze}'.")
             st.session_state['analyze_triggered'] = False 
             st.session_state['selected_file_for_analysis'] = None 
-            st.write("DEBUG: Analysis complete. Trigger and selected file reset.")
 
     except Exception as e:
         st.error(f"Error analyzing file from S3: {e}. Please check file format and column names in your CSV file.")
-        st.write("DEBUG: An error occurred during analysis:", e)
         st.session_state['scored_data'] = pd.DataFrame()
         st.session_state['analyze_triggered'] = False 
         st.session_state['selected_file_for_analysis'] = None 
 
-# --- Clear Data Button ---
-if st.session_state['scored_data'] is not None and not st.session_state['scored_data'].empty:
-    if st.button("Clear Displayed Data", key="clear_data_button"):
-        st.session_state['scored_data'] = pd.DataFrame()
-        st.session_state['analyze_triggered'] = False
-        st.session_state['selected_file_for_analysis'] = None
-        st.success("Displayed data cleared.")
-        st.rerun() 
-
-# --- Display Dashboard Results ---
-st.markdown("### Dashboard Display")
 if 'scored_data' in st.session_state and not st.session_state['scored_data'].empty:
     df_display = st.session_state['scored_data']
-    st.write("DEBUG: Displaying scored data.")
-    st.write("DEBUG: Columns in df_display at dashboard start:", df_display.columns.tolist()) 
 
-    st.subheader("Full Credit Data with Scores and Decisions") 
-    st.dataframe(df_display)
+    # --- Top Row Metrics ---
+    st.markdown("### Key Credit Metrics")
+    col_metrics = st.columns(4)
 
-    # Adjustable Approval Threshold Slider
-    st.markdown("---")
-    st.subheader("Adjust Risk Approval Threshold") 
-    st.session_state['approval_threshold'] = st.slider(
-        "Set Minimum Score for Approval:",
-        min_value=0,
-        max_value=100,
-        value=st.session_state['approval_threshold'], 
-        step=1,
-        help="Applicants with a score equal to or above this value will be 'Approved'. Adjust to see impact on decisions.",
-        key="approval_threshold_slider"
-    )
-    st.info(f"Current Approval Threshold: **{st.session_state['approval_threshold']}**")
-    st.warning("Changing the threshold will re-evaluate all decisions. Click 'Analyze Selected File' again to apply.")
+    # Dummy data for sparklines (replace with actual time series if available)
+    # For demonstration, let's create a simple dummy time series based on the number of rows
+    num_rows = len(df_display)
+    dummy_dates = pd.date_range(start='2024-01-01', periods=num_rows, freq='D') # Daily data
+    dummy_trend_data = pd.DataFrame({
+        'Date': dummy_dates,
+        'Value': np.linspace(50, 100, num_rows) + np.random.randn(num_rows) * 5 # Simple increasing trend with noise
+    })
+    # Take a sample for sparkline if data is too large
+    sparkline_data_sample = dummy_trend_data.sample(min(50, len(dummy_trend_data))).sort_values('Date')
 
-    # --- Dashboard Visualizations Section ---
-    st.header("Credit Performance Dashboard") 
-    st.markdown("Dive into the top-performing and most vulnerable credit applications with interactive charts.") 
 
-    col1, col2 = st.columns(2)
+    with col_metrics[0]:
+        current_tlsum = df_display['TLSum'].sum() if 'TLSum' in df_display.columns else 0
+        prev_tlsum = current_tlsum * 0.95 # Dummy previous year
+        create_metric_card("Total Loan Sum", current_tlsum, prev_tlsum, unit="", chart_data=sparkline_data_sample, chart_y_col='Value')
 
-    with col1:
-        st.subheader("Top 10 Approved Applicants (Highest Scores)") 
-        # Sort by Score descending and get the top 10
-        top_10_approved_loans = df_display[df_display['Decision'] == 'Approved'].sort_values(by='Score', ascending=False).head(10)
+    with col_metrics[1]:
+        current_score_avg = df_display['Score'].mean() if 'Score' in df_display.columns else 0
+        prev_score_avg = current_score_avg * 1.02 # Dummy previous year
+        create_metric_card("Avg Credit Score", current_score_avg, prev_score_avg, is_percentage=False, chart_data=sparkline_data_sample, chart_y_col='Value')
+
+    with col_metrics[2]:
+        current_tlcnt = df_display['TLCnt'].sum() if 'TLCnt' in df_display.columns else 0
+        prev_tlcnt = current_tlcnt * 0.9 # Dummy previous year
+        create_metric_card("Total Trades", current_tlcnt, prev_tlcnt, unit="", chart_data=sparkline_data_sample, chart_y_col='Value')
+
+    with col_metrics[3]:
+        current_bad_cnt = df_display['TLBadCnt24'].sum() if 'TLBadCnt24' in df_display.columns else 0
+        prev_bad_cnt = current_bad_cnt * 1.1 # Dummy previous year (increased bad count)
+        create_metric_card("Bad Trades (24M)", current_bad_cnt, prev_bad_cnt, unit="", chart_data=sparkline_data_sample, chart_y_col='Value')
+
+
+    # --- Middle Row Charts ---
+    st.markdown("### Performance Overview")
+    col_middle_charts = st.columns(2)
+
+    with col_middle_charts[0]:
+        st.markdown('<div class="dashboard-card chart-card">', unsafe_allow_html=True)
+        st.markdown("<h4>Credit Decision Trend (Dummy Years)</h4>")
+        # Dummy data for trend over years
+        trend_data = pd.DataFrame({
+            'Year': [2021, 2022, 2023, 2024],
+            'Approved': [np.random.randint(100, 500), np.random.randint(100, 500), np.random.randint(100, 500), np.random.randint(100, 500)],
+            'Rejected': [np.random.randint(10, 100), np.random.randint(10, 100), np.random.randint(10, 100), np.random.randint(10, 100)]
+        })
+        fig_trend = px.bar(
+            trend_data.melt(id_vars='Year', var_name='Decision', value_name='Count'),
+            x='Year', y='Count', color='Decision',
+            barmode='group',
+            color_discrete_map={'Approved': '#6a8dff', 'Rejected': '#f44336'},
+            template="plotly_dark",
+            text='Count'
+        )
+        fig_trend.update_layout(xaxis_tickangle=-45, transition_duration=500,
+                                paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+                                font_color="#e0e0e0", margin=dict(t=30, b=0, l=0, r=0))
+        fig_trend.update_traces(texttemplate='%{y}', textposition='outside')
+        st.plotly_chart(fig_trend, use_container_width=True, config={'displayModeBar': False})
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with col_middle_charts[1]:
+        st.markdown('<div class="dashboard-card table-card">', unsafe_allow_html=True)
+        st.markdown("<h4>Business Overview by Decision</h4>")
+        # Aggregate data by Decision for overview
+        overview_df = df_display.groupby('Decision').agg(
+            Total_Loans=('ID', 'count'),
+            Avg_Score=('Score', 'mean'),
+            Total_TLSum=('TLSum', 'sum'),
+            Total_BadCnt24=('TLBadCnt24', 'sum')
+        ).reset_index()
+        overview_df.columns = ['Decision', 'Total Loans', 'Avg Score', 'Total Loan Sum', 'Total Bad Trades']
+        st.dataframe(overview_df.style.format({
+            'Avg Score': "{:.2f}",
+            'Total Loan Sum': "{:,.0f}",
+            'Total Bad Trades': "{:,.0f}"
+        }).set_table_styles([
+            {'selector': 'th', 'props': [('background-color', '#3f3f6f'), ('color', '#e0e0e0')]},
+            {'selector': 'td', 'props': [('background-color', '#2a2a4a'), ('color', '#e0e0e0')]},
+            {'selector': 'tr:nth-of-type(odd)', 'props': [('background-color', '#2a2a4a')]},
+            {'selector': 'tr:nth-of-type(even)', 'props': [('background-color', '#20203a')]}
+        ]), use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # --- Bottom Row Charts ---
+    st.markdown("### Detailed Insights")
+    col_bottom_charts = st.columns(2)
+
+    with col_bottom_charts[0]:
+        st.markdown('<div class="dashboard-card chart-card">', unsafe_allow_html=True)
+        st.markdown("<h4>Decision Contribution by Derogatory Count Group</h4>")
+        # Create a categorical feature from DerogCnt for pie chart
+        df_display['DerogCnt_Group'] = pd.cut(df_display['DerogCnt'], bins=[-1, 0, 1, 5, df_display['DerogCnt'].max()],
+                                              labels=['No Derog', '1 Derog', '2-5 Derogs', '>5 Derogs'],
+                                              right=True, include_lowest=True)
         
-        st.write(f"DEBUG: Columns in top_10_approved_loans: {top_10_approved_loans.columns.tolist()}") 
-        st.write("DEBUG: Top 10 Approved Loans Data (ID and Score):")
-        st.dataframe(top_10_approved_loans[['ID', 'Score']]) # Show relevant columns for debugging
-
-        if not top_10_approved_loans.empty:
-            # Ensure 'ID' is treated as a categorical type for sorting
-            top_10_approved_loans['ID'] = top_10_approved_loans['ID'].astype(str)
-            ordered_top_ids = top_10_approved_loans['ID'].tolist()
-
-            fig_top10 = px.bar(
-                top_10_approved_loans,
-                x='ID', # Use 'ID' for x-axis
-                y='Score',
-                color_discrete_sequence=['#4CAF50'], 
-                title='Top 10 Approved Applicants by Score', 
-                labels={'ID': 'Applicant ID', 'Score': 'Credit Score'}, 
-                hover_data=NUMERICAL_FEATURES + CATEGORICAL_FEATURES + ['Decision'],
-                text='Score' # Show score on bars
-            )
-            # Ensure bars are in descending order of score
-            fig_top10.update_xaxes(categoryorder='array', categoryarray=ordered_top_ids, type='category') 
-            fig_top10.update_traces(texttemplate='%{text:.2s}', textposition='outside') # Format text on bars
-            fig_top10.update_layout(xaxis_tickangle=-45, transition_duration=500) # Added transition
-            st.plotly_chart(fig_top10, use_container_width=True)
-        else:
-            st.info("No approved applicants to display in the top 10 chart based on current threshold.")
-
-
-    with col2:
-        st.subheader("Worst 10 Rejected Applicants (Lowest Scores)") 
-        # Sort by Score ascending and get the top 10 (which are the worst)
-        worst_10_rejected_loans = df_display[df_display['Decision'] == 'Rejected'].sort_values(by='Score', ascending=True).head(10)
+        pie_data = df_display.groupby('DerogCnt_Group')['ID'].count().reset_index()
+        pie_data.columns = ['DerogCnt_Group', 'Count']
         
-        st.write(f"DEBUG: Columns in worst_10_rejected_loans: {worst_10_rejected_loans.columns.tolist()}") 
-        st.write("DEBUG: Worst 10 Rejected Loans Data (ID and Score):")
-        st.dataframe(worst_10_rejected_loans[['ID', 'Score']]) # Show relevant columns for debugging
+        fig_pie = px.pie(
+            pie_data,
+            values='Count',
+            names='DerogCnt_Group',
+            title='Proportion of Loans by Derogatory Count Group',
+            color_discrete_sequence=px.colors.sequential.RdBu, # A diverging color scale
+            template="plotly_dark"
+        )
+        fig_pie.update_layout(transition_duration=500,
+                              paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+                              font_color="#e0e0e0", margin=dict(t=30, b=0, l=0, r=0))
+        fig_pie.update_traces(textposition='inside', textinfo='percent+label', marker=dict(line=dict(color='#2a2a4a', width=2)))
+        st.plotly_chart(fig_pie, use_container_width=True, config={'displayModeBar': False})
+        st.markdown('</div>', unsafe_allow_html=True)
 
-        if not worst_10_rejected_loans.empty:
-            # Get ordered IDs for Plotly category_orders
-            worst_10_rejected_loans['ID'] = worst_10_rejected_loans['ID'].astype(str) # Ensure 'ID' is string
-            ordered_worst_ids = worst_10_rejected_loans['ID'].tolist()
-
-            fig_worst10 = px.bar(
-                worst_10_rejected_loans,
-                x='ID', # Use 'ID' for x-axis
-                y='Score',
-                color_discrete_sequence=['#f44336'], 
-                title='Worst 10 Rejected Applicants by Score', 
-                labels={'ID': 'Applicant ID', 'Score': 'Credit Score'}, 
-                hover_data=NUMERICAL_FEATURES + CATEGORICAL_FEATURES + ['Decision'],
-                text='Score' # Show score on bars
+    with col_bottom_charts[1]:
+        st.markdown('<div class="dashboard-card chart-card">', unsafe_allow_html=True)
+        st.markdown("<h4>Average Statistics by Loan Decision (Group 1: Counts & Indicators)</h4>")
+        features_group1 = [col for col in GROUP_1_COUNTS_INDICATORS if col in df_display.columns]
+        if features_group1:
+            df_numeric_for_stats = df_display[features_group1 + ['Decision']].apply(pd.to_numeric, errors='coerce').fillna(0)
+            summary_stats_group1 = df_numeric_for_stats.groupby('Decision').mean().T.reset_index()
+            summary_stats_group1.columns = ['Feature', 'Approved Avg', 'Rejected Avg']
+            summary_stats_long_group1 = summary_stats_group1.melt(
+                id_vars='Feature', var_name='Decision Type', value_name='Average Value'
             )
-            # Ensure bars are in ascending order of score
-            fig_worst10.update_xaxes(categoryorder='array', categoryarray=ordered_worst_ids, type='category') 
-            fig_worst10.update_traces(texttemplate='%{text:.2s}', textposition='outside') # Format text on bars
-            fig_worst10.update_layout(xaxis_tickangle=-45, transition_duration=500) # Added transition
-            st.plotly_chart(fig_worst10, use_container_width=True)
+            fig_group1 = px.bar(
+                summary_stats_long_group1,
+                x='Feature', y='Average Value', color='Decision Type', barmode='group',
+                labels={'Feature': 'Credit Feature', 'Average Value': 'Average Value'},
+                color_discrete_map={'Approved Avg': '#6a8dff', 'Rejected Avg': '#f44336'},
+                text_auto='.2s',
+                template="plotly_dark"
+            )
+            fig_group1.update_layout(xaxis_tickangle=-45, transition_duration=500,
+                                     paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+                                     font_color="#e0e0e0", margin=dict(t=30, b=0, l=0, r=0))
+            st.plotly_chart(fig_group1, use_container_width=True, config={'displayModeBar': False})
         else:
-            st.info("No rejected applicants to display in the worst 10 chart based on current threshold.")
+            st.info("No features in Group 1 available for plotting.")
+        st.markdown('</div>', unsafe_allow_html=True)
 
-    # Overall Score Distribution Histogram
-    st.subheader("Overall Credit Score Distribution")
-    fig_hist = px.histogram(
-        df_display,
-        x='Score',
-        nbins=20, 
-        title='Distribution of Credit Scores',
-        labels={'Score': 'Credit Score'},
-        color='Decision', 
-        color_discrete_map={'Approved': '#4CAF50', 'Rejected': '#f44336'},
-        marginal='box' 
-    )
-    fig_hist.add_vline(x=st.session_state['approval_threshold'], line_width=2, line_dash="dash", line_color="blue", annotation_text=f"Threshold: {st.session_state['approval_threshold']}", annotation_position="top right")
-    fig_hist.update_layout(transition_duration=500) # Added transition
-    st.plotly_chart(fig_hist, use_container_width=True)
+    # Additional charts for other groups (similar structure)
+    st.markdown("### Further Average Statistics")
+    col_avg_charts = st.columns(2)
 
-    # Display the full vulnerable loans table as before
-    st.subheader("Rejected Applicants Summary") 
-    vulnerable_loans = df_display[df_display['Decision'] == 'Rejected']
+    with col_avg_charts[0]:
+        st.markdown('<div class="dashboard-card chart-card">', unsafe_allow_html=True)
+        st.markdown("<h4>Average Statistics by Loan Decision (Group 2: Time & Percentages)</h4>")
+        features_group2 = [col for col in GROUP_2_TIME_PERCENTAGES if col in df_display.columns]
+        if features_group2:
+            df_numeric_for_stats = df_display[features_group2 + ['Decision']].apply(pd.to_numeric, errors='coerce').fillna(0)
+            summary_stats_group2 = df_numeric_for_stats.groupby('Decision').mean().T.reset_index()
+            summary_stats_group2.columns = ['Feature', 'Approved Avg', 'Rejected Avg']
+            summary_stats_long_group2 = summary_stats_group2.melt(
+                id_vars='Feature', var_name='Decision Type', value_name='Average Value'
+            )
+            fig_group2 = px.bar(
+                summary_stats_long_group2,
+                x='Feature', y='Average Value', color='Decision Type', barmode='group',
+                labels={'Feature': 'Credit Feature', 'Average Value': 'Average Value'},
+                color_discrete_map={'Approved Avg': '#6a8dff', 'Rejected Avg': '#f44336'},
+                text_auto='.2s',
+                template="plotly_dark"
+            )
+            fig_group2.update_layout(xaxis_tickangle=-45, transition_duration=500,
+                                     paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+                                     font_color="#e0e0e0", margin=dict(t=30, b=0, l=0, r=0))
+            st.plotly_chart(fig_group2, use_container_width=True, config={'displayModeBar': False})
+        else:
+            st.info("No features in Group 2 available for plotting.")
+        st.markdown('</div>', unsafe_allow_html=True)
 
-    if not vulnerable_loans.empty:
-        st.dataframe(vulnerable_loans)
-        st.info(f"Found {len(vulnerable_loans)} rejected applicants.") 
-    else:
-        st.success("No rejected applicants found in this dataset based on current threshold!") 
-
-    # --- New: Summary Statistics Section ---
-    st.markdown("---")
-    st.header("Overall Loan Summary & Average Statistics")
-    
-    total_loans = len(df_display)
-    approved_count = len(df_display[df_display['Decision'] == 'Approved'])
-    rejected_count = len(df_display[df_display['Decision'] == 'Rejected'])
-
-    st.markdown(f"**Total Loans Analyzed:** {total_loans}")
-    st.markdown(f"**Approved Loans:** {approved_count}")
-    st.markdown(f"**Rejected Loans:** {rejected_count}")
-
-    st.subheader("Average Statistics for Approved vs. Rejected Loans")
-
-    # Ensure selected columns are numeric before calculating mean
-    # Filter df_display to only include relevant numerical features for stats
-    df_numeric_for_stats = df_display[NUMERICAL_FEATURES_FOR_PLOTTING].apply(pd.to_numeric, errors='coerce').fillna(0)
-    
-    approved_stats = df_numeric_for_stats[df_display['Decision'] == 'Approved'].mean().rename('Approved Avg')
-    rejected_stats = df_numeric_for_stats[df_display['Decision'] == 'Rejected'].mean().rename('Rejected Avg')
-
-    # Combine into a single DataFrame for display
-    summary_stats_df = pd.DataFrame([approved_stats, rejected_stats]).T
-    summary_stats_df.index.name = 'Feature'
-    st.dataframe(summary_stats_df.style.format("{:.2f}"))
-
-    st.info("Compare the average values of key features between approved and rejected loans to understand influencing factors.")
-
-    # --- New: Bar charts for Average Statistics (Split into 3) ---
-    st.subheader("Visualizing Average Statistics by Feature Group")
-
-    # Group 1: Counts & Indicators
-    features_group1 = [col for col in GROUP_1_COUNTS_INDICATORS if col in df_numeric_for_stats.columns]
-    if features_group1:
-        summary_stats_group1 = summary_stats_df.loc[features_group1].reset_index().melt(
-            id_vars='Feature', var_name='Decision Type', value_name='Average Value'
-        )
-        fig_group1 = px.bar(
-            summary_stats_group1,
-            x='Feature', y='Average Value', color='Decision Type', barmode='group',
-            title='Group 1: Average Counts & Indicators by Loan Decision',
-            labels={'Feature': 'Credit Feature', 'Average Value': 'Average Value'},
-            color_discrete_map={'Approved Avg': '#4CAF50', 'Rejected Avg': '#f44336'},
-            text_auto='.2s'
-        )
-        fig_group1.update_layout(xaxis_tickangle=-45, transition_duration=500) # Added transition
-        st.plotly_chart(fig_group1, use_container_width=True)
-    else:
-        st.info("No features in Group 1 available for plotting.")
-
-    # Group 2: Time & Percentages
-    features_group2 = [col for col in GROUP_2_TIME_PERCENTAGES if col in df_numeric_for_stats.columns]
-    if features_group2:
-        summary_stats_group2 = summary_stats_df.loc[features_group2].reset_index().melt(
-            id_vars='Feature', var_name='Decision Type', value_name='Average Value'
-        )
-        fig_group2 = px.bar(
-            summary_stats_group2,
-            x='Feature', y='Average Value', color='Decision Type', barmode='group',
-            title='Group 2: Average Time & Percentages by Loan Decision',
-            labels={'Feature': 'Credit Feature', 'Average Value': 'Average Value'},
-            color_discrete_map={'Approved Avg': '#4CAF50', 'Rejected Avg': '#f44336'},
-            text_auto='.2s'
-        )
-        fig_group2.update_layout(xaxis_tickangle=-45, transition_duration=500) # Added transition
-        st.plotly_chart(fig_group2, use_container_width=True)
-    else:
-        st.info("No features in Group 2 available for plotting.")
-
-    # Group 3: Sums & Max Sums
-    features_group3 = [col for col in GROUP_3_SUMS_MAXSUMS if col in df_numeric_for_stats.columns]
-    if features_group3:
-        summary_stats_group3 = summary_stats_df.loc[features_group3].reset_index().melt(
-            id_vars='Feature', var_name='Decision Type', value_name='Average Value'
-        )
-        fig_group3 = px.bar(
-            summary_stats_group3,
-            x='Feature', y='Average Value', color='Decision Type', barmode='group',
-            title='Group 3: Average Sums & Max Sums by Loan Decision',
-            labels={'Feature': 'Credit Feature', 'Average Value': 'Average Value'},
-            color_discrete_map={'Approved Avg': '#4CAF50', 'Rejected Avg': '#f44336'},
-            text_auto='.2s'
-        )
-        fig_group3.update_layout(xaxis_tickangle=-45, transition_duration=500) # Added transition
-        st.plotly_chart(fig_group3, use_container_width=True)
-    else:
-        st.info("No features in Group 3 available for plotting.")
+    with col_avg_charts[1]:
+        st.markdown('<div class="dashboard-card chart-card">', unsafe_allow_html=True)
+        st.markdown("<h4>Average Statistics by Loan Decision (Group 3: Sums & Max Sums)</h4>")
+        features_group3 = [col for col in GROUP_3_SUMS_MAXSUMS if col in df_display.columns]
+        if features_group3:
+            df_numeric_for_stats = df_display[features_group3 + ['Decision']].apply(pd.to_numeric, errors='coerce').fillna(0)
+            summary_stats_group3 = df_numeric_for_stats.groupby('Decision').mean().T.reset_index()
+            summary_stats_group3.columns = ['Feature', 'Approved Avg', 'Rejected Avg']
+            summary_stats_long_group3 = summary_stats_group3.melt(
+                id_vars='Feature', var_name='Decision Type', value_name='Average Value'
+            )
+            fig_group3 = px.bar(
+                summary_stats_long_group3,
+                x='Feature', y='Average Value', color='Decision Type', barmode='group',
+                labels={'Feature': 'Credit Feature', 'Average Value': 'Average Value'},
+                color_discrete_map={'Approved Avg': '#6a8dff', 'Rejected Avg': '#f44336'},
+                text_auto='.2s',
+                template="plotly_dark"
+            )
+            fig_group3.update_layout(xaxis_tickangle=-45, transition_duration=500,
+                                     paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+                                     font_color="#e0e0e0", margin=dict(t=30, b=0, l=0, r=0))
+            st.plotly_chart(fig_group3, use_container_width=True, config={'displayModeBar': False})
+        else:
+            st.info("No features in Group 3 available for plotting.")
+        st.markdown('</div>', unsafe_allow_html=True)
 
 
-    # --- New: LLM Suggestions for Rejected Loans ---
+    # --- Full Data Table (optional, can be moved to a separate tab/section) ---
+    st.markdown("### Full Credit Data")
+    st.markdown('<div class="dashboard-card table-card">', unsafe_allow_html=True)
+    st.dataframe(df_display.style.set_table_styles([
+            {'selector': 'th', 'props': [('background-color', '#3f3f6f'), ('color', '#e0e0e0')]},
+            {'selector': 'td', 'props': [('background-color', '#2a2a4a'), ('color', '#e0e0e0')]},
+            {'selector': 'tr:nth-of-type(odd)', 'props': [('background-color', '#2a2a4a')]},
+            {'selector': 'tr:nth-of-type(even)', 'props': [('background-color', '#20203a')]}
+        ]), use_container_width=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # --- LLM Explanations ---
     st.markdown("---")
     st.header("AI-Powered Explanations for Rejected Loans")
     st.info("Click on a rejected loan's ID to get an AI-generated explanation for the decision.")
 
-    if not worst_10_rejected_loans.empty:
-        for index, row in worst_10_rejected_loans.iterrows():
+    vulnerable_loans = df_display[df_display['Decision'] == 'Rejected'].sort_values(by='Score', ascending=True)
+
+    if not vulnerable_loans.empty:
+        for index, row in vulnerable_loans.iterrows():
             loan_id = row['ID']
             score = row['Score']
             decision = row['Decision']
             
-            # Extract relevant features for the LLM prompt
-            # Convert Series to dictionary for easier LLM input
             loan_features = row[NUMERICAL_FEATURES + CATEGORICAL_FEATURES].dropna().to_dict()
 
             with st.expander(f"Explain why Loan ID: **{loan_id}** (Score: {score:.2f}, Decision: {decision}) was rejected"):
-                # Use st.spinner for synchronous LLM call
                 with st.spinner(f"Generating explanation for {loan_id}..."):
                     explanation = get_llm_explanation(loan_features, score, decision) 
                     st.markdown(explanation)
@@ -843,11 +965,11 @@ if 'scored_data' in st.session_state and not st.session_state['scored_data'].emp
 
 
 else:
-    st.write("DEBUG: No scored data found in session state or data is empty. Dashboard not displayed.")
+    st.info("Upload a CSV file and click 'Analyze' to view the dashboard.")
 
-# --- AWS and Langchain Integration Explanation (Recap) ---
+# --- AWS and LLM Integration Explanation (Recap) ---
 st.markdown("---")
-st.subheader("How this app would integrate with AWS and Langchain (Recap):")
+st.subheader("How this app would integrate with AWS and LLM (Recap):")
 
 st.markdown(
     """
@@ -860,10 +982,7 @@ st.markdown(
     * **Authentication & Authorization (Cognito):** For secure user access to the app and S3, ensuring only authorized users can upload or view sensitive data.
     * **Logging & Monitoring (CloudWatch):** To track app performance, S3 interactions, and potential errors, providing insights for operational management.
 
-    ### 🔗 Langchain Integration:
-    Langchain is primarily used for building applications with Large Language Models (LLMs). It could enhance this application in several ways:
-    * **Explainable AI (XAI):** After identifying rejected applicants, Langchain could prompt an LLM to generate more detailed, human-readable explanations for *why* specific applicants were flagged as high-risk, based on their input features.
-    * **Conversational Interface:** Users could interact with the dashboard using natural language queries (e.g., "Show me all applicants with a Derogatory Count greater than 1"), with Langchain interpreting the query and dynamically filtering the DataFrame.
-    * **Automated Reporting:** Langchain could help generate summary reports or alerts for high-risk applications, potentially integrating with email services to notify relevant stakeholders.
+    ### 🧠 Large Language Model (LLM) Integration:
+    The LLM (currently OpenAI's GPT-3.5-turbo) is used to provide **Explainable AI (XAI)**. After identifying rejected applicants, the LLM generates concise, human-readable explanations for *why* specific applicants were flagged as high-risk, based on their input features. This helps in understanding and communicating complex model decisions.
     """
 )
