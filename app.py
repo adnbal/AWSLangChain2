@@ -8,7 +8,7 @@ import time
 import json
 import requests # For making HTTP requests to the LLM API
 import boto3 # Ensure boto3 is imported
-import random # <--- CRITICAL FIX: Added this import
+import random # Ensure random is imported
 
 # --- Import scikit-learn components ---
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
@@ -29,18 +29,15 @@ st.session_state.setdefault('uploaded_df_columns', []) # To store columns of the
 st.session_state.setdefault('selected_target_column', 'TARGET') # Default target column name is 'TARGET' for credit.csv
 
 # --- Define Feature Columns for the 'credit.csv' dataset ---
-# This list has been carefully adjusted to 27 features to match the actual
-# number of unique features present in your credit.csv after dropping the duplicate.
+# This list now correctly defines 27 unique numerical features.
+# 'TLDel60Cnt24' is included once.
 NUMERICAL_FEATURES = [
     'DerogCnt', 'CollectCnt', 'BanruptcyInd', 'InqCnt06', 'InqTimeLast', 'InqFinanceCnt24',
     'TLTimeFirst', 'TLTimeLast', 'TLCnt03', 'TLCnt12', 'TLCnt24', 'TLCnt',
-    'TLSum', 'TLMaxSum', 'TLSatCnt', 'TLDel60Cnt', # 'TLDel60Cnt24' will be the one that remains after dropping duplicate
+    'TLSum', 'TLMaxSum', 'TLSatCnt', 'TLDel60Cnt', 'TLDel60Cnt24', # TLDel60Cnt24 is here ONCE
     'TLBadCnt24', 'TL75UtilCnt', 'TL50UtilCnt', 'TLBalHCPct', 'TLSatPct', 'TLDel3060Cnt24',
     'TLDel90Cnt24', 'TLDel60CntAll', 'TLOpenPct', 'TLBadDerogCnt', 'TLOpen24Pct'
 ]
-# Adding TLDel60Cnt24 explicitly as the 27th feature, assuming it's the one that remains.
-# This ensures the list has 27 elements.
-NUMERICAL_FEATURES.append('TLDel60Cnt24') 
 
 CATEGORICAL_FEATURES = [] # No explicit categorical features based on previous analysis
 
@@ -93,7 +90,7 @@ dummy_data_for_training = pd.concat([
         'TLOpenPct': [round(random.uniform(0.7,0.9),2) for _ in range(20)],
         'TLBadDerogCnt': [0]*20,
         'TLOpen24Pct': [round(random.uniform(0.8,0.95),2) for _ in range(20)],
-        'TLDel60Cnt24': [0]*20, # Explicitly added to make it 27 features
+        'TLDel60Cnt24': [0]*20, # This is the *only* TLDel60Cnt24 in dummy data
         DUMMY_TARGET_COLUMN_NAME: [0] * 20
     }),
     pd.DataFrame({ # Bad applicants (TARGET = 1) - high derogatory, low credit age, high inquiries
@@ -125,7 +122,7 @@ dummy_data_for_training = pd.concat([
         'TLOpenPct': [round(random.uniform(0.1,0.3),2) for _ in range(10)],
         'TLBadDerogCnt': [random.randint(1,3) for _ in range(10)],
         'TLOpen24Pct': [round(random.uniform(0.2,0.4),2) for _ in range(10)],
-        'TLDel60Cnt24': [random.randint(1,3) for _ in range(10)], # Explicitly added to make it 27 features
+        'TLDel60Cnt24': [random.randint(1,3) for _ in range(10)], # This is the *only* TLDel60Cnt24 in dummy data
         DUMMY_TARGET_COLUMN_NAME: [1] * 10
     })
 ], ignore_index=True)
