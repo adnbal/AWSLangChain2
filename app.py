@@ -136,57 +136,52 @@ if not st.session_state['scored_data'].empty:
     st.subheader("Loan Decision Breakdown")
     st.plotly_chart(px.pie(df_display, names="Decision", title="Decision Breakdown"), use_container_width=True)
 
-    # --- Average Feature Values by Decision (Grouped Bar) ---
+    # --- Average Feature Values by Decision (Split by Scale) ---
     st.markdown("---")
-    st.subheader("Average Feature Values by Loan Decision")
+    st.subheader("Average Feature Values by Loan Decision (Split by Scale)")
 
     avg_features = df_display.groupby('Decision')[NUMERICAL_FEATURES].mean().reset_index()
     melted_avg = avg_features.melt(id_vars='Decision', var_name='Credit Feature', value_name='Average Value')
 
-    fig_avg = px.bar(
-        melted_avg,
-        x="Credit Feature",
-        y="Average Value",
-        color="Decision",
-        barmode="group",
-        title="Average Feature Values by Loan Decision",
-        text_auto=".2f"
-    )
+    # Define feature groups
+    group_1 = ['DerogCnt', 'CollectCnt', 'BanruptcyInd', 'InqCnt06', 'InqFinanceCnt24',
+               'TLCnt03', 'TLCnt12', 'TLCnt24', 'TLCnt', 'TLSatCnt', 'TLDel60Cnt', 'TLBadCnt24',
+               'TL75UtilCnt', 'TL50UtilCnt', 'TLDel3060Cnt24', 'TLDel90Cnt24', 'TLDel60CntAll',
+               'TLBadDerogCnt', 'TLDel60Cnt24']
 
-    fig_avg.update_layout(
-        xaxis_tickangle=-45,
-        legend_title="Decision Type",
-        height=600
-    )
-    st.plotly_chart(fig_avg, use_container_width=True)
+    group_2 = ['InqTimeLast', 'TLTimeLast', 'TLBalHCPct', 'TLSatPct', 'TLOpenPct', 'TLOpen24Pct']
+
+    group_3 = ['TLSum', 'TLMaxSum']
+
+    def plot_group(features, title):
+        subset = melted_avg[melted_avg['Credit Feature'].isin(features)]
+        fig = px.bar(
+            subset,
+            x="Credit Feature",
+            y="Average Value",
+            color="Decision",
+            barmode="group",
+            text_auto=".2f",
+            title=title
+        )
+        fig.update_layout(xaxis_tickangle=-45, legend_title="Decision Type", height=500)
+        st.plotly_chart(fig, use_container_width=True)
+
+    plot_group(group_1, "Average Counts & Indicators by Loan Decision")
+    plot_group(group_2, "Average Time & Percentage Features by Loan Decision")
+    plot_group(group_3, "Average Monetary Features by Loan Decision")
 
     # --- Top & Bottom Scores (Ordered Horizontal) ---
     st.markdown("---")
     st.subheader("Top & Bottom Scores Analysis")
 
-    # Top 10 Highest Scores
     top_scores = df_display.sort_values(by="Score", ascending=False).head(10).sort_values(by="Score", ascending=True)
-    fig_top = px.bar(
-        top_scores,
-        x="Score", y="ID",
-        orientation="h",
-        title="Top 10 Highest Credit Scores",
-        color="Score",
-        text="Score"
-    )
+    fig_top = px.bar(top_scores, x="Score", y="ID", orientation="h", title="Top 10 Highest Credit Scores", color="Score", text="Score")
     fig_top.update_traces(texttemplate='%{text:.2f}', textposition='outside')
     st.plotly_chart(fig_top, use_container_width=True)
 
-    # Top 10 Lowest Scores
     bottom_scores = df_display.sort_values(by="Score", ascending=True).head(10)
-    fig_bottom = px.bar(
-        bottom_scores.sort_values(by="Score", ascending=False),
-        x="Score", y="ID",
-        orientation="h",
-        title="Top 10 Lowest Credit Scores",
-        color="Score",
-        text="Score"
-    )
+    fig_bottom = px.bar(bottom_scores.sort_values(by="Score", ascending=False), x="Score", y="ID", orientation="h", title="Top 10 Lowest Credit Scores", color="Score", text="Score")
     fig_bottom.update_traces(texttemplate='%{text:.2f}', textposition='outside')
     st.plotly_chart(fig_bottom, use_container_width=True)
 
