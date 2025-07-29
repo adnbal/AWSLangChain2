@@ -10,7 +10,7 @@ st.session_state.setdefault('scored_data', pd.DataFrame())
 
 # --- Page Setup ---
 st.set_page_config(page_title="Credit Scoring Dashboard", layout="wide")
-st.title("📊 Credit Scoring Dashboard with Adjustable Threshold & Predictors Summary")
+st.title("📊 Credit Scoring Dashboard with Adjustable Threshold & Predictor Summary")
 
 # --- Threshold Slider ---
 st.markdown("### 🔍 Set Approval Threshold")
@@ -34,7 +34,6 @@ def get_credit_score_realistic(df_input):
     missing_cols = [col for col in NUMERICAL_FEATURES if col not in df.columns]
     for col in missing_cols:
         df[col] = 0
-
     # Simulate realistic credit scores
     np.random.seed(42)
     scores = np.random.normal(75, 10, len(df))  # Mean 75, std dev 10
@@ -135,14 +134,22 @@ if not st.session_state['scored_data'].empty:
     st.markdown("---")
     st.subheader("🔍 Predictor Summary for Approved vs Rejected Loans")
 
+    # Ensure numeric features exist and convert to numeric
+    for col in NUMERICAL_FEATURES:
+        if col not in df_display.columns:
+            df_display[col] = 0
+    df_numeric = df_display[NUMERICAL_FEATURES].apply(pd.to_numeric, errors='coerce').fillna(0)
+    df_numeric['Decision'] = df_display['Decision']
+
     # Compute average predictor values by Decision
-    predictor_summary = df_display.groupby('Decision')[NUMERICAL_FEATURES].mean().T
-    predictor_summary = predictor_summary.sort_values(by='Approved', ascending=False)  # Sort by Approved values
+    predictor_summary = df_numeric.groupby('Decision').mean().T
+    if 'Approved' in predictor_summary.columns:
+        predictor_summary = predictor_summary.sort_values(by='Approved', ascending=False)
 
     st.write("**Average Feature Values by Loan Status:**")
     st.dataframe(predictor_summary.style.format("{:.2f}"))
 
-    # Visualize top predictors
+    # Visualize top predictors (top 10 by Approved value)
     top_features = predictor_summary.head(10).reset_index().melt(id_vars='index', var_name='Decision', value_name='Average Value')
     fig_features = px.bar(top_features, x='index', y='Average Value', color='Decision', barmode='group',
                           title="Top 10 Predictors - Avg Value by Loan Status")
