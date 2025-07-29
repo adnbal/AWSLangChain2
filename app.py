@@ -746,7 +746,7 @@ if 'scored_data' in st.session_state and not st.session_state['scored_data'].emp
             y='Average Value',
             color='Decision Type',
             barmode='group', # Group bars for each feature
-            title='Average Feature Values by Loan Decision',
+            title='Average Feature Values by Loan Decision (Excluding TLTimeFirst)', # Updated title
             labels={'Feature': 'Credit Feature', 'Average Value': 'Average Value'},
             color_discrete_map={'Approved Avg': '#4CAF50', 'Rejected Avg': '#f44336'},
             text_auto='.2s' # Automatically show values on bars, formatted to 2 significant figures
@@ -795,4 +795,12 @@ st.markdown(
     * **Machine Learning Model Hosting (SageMaker):** In a real scenario, the `get_credit_score_ml` function would call a sophisticated ML model deployed on AWS SageMaker for more accurate and robust predictions. This separates the heavy computation from the Streamlit app.
     * **Serverless Functions (Lambda):** Could be used for automated processing of new files uploaded to S3 (e.g., triggering the scoring process automatically).
     * **Authentication & Authorization (Cognito):** For secure user access to the app and S3, ensuring only authorized users can upload or view sensitive data.
-    * **Logging & Monitoring (CloudWatc
+    * **Logging & Monitoring (CloudWatch):** To track app performance, S3 interactions, and potential errors, providing insights for operational management.
+
+    ### 🔗 Langchain Integration:
+    Langchain is primarily used for building applications with Large Language Models (LLMs). It could enhance this application in several ways:
+    * **Explainable AI (XAI):** After identifying rejected applicants, Langchain could prompt an LLM to generate more detailed, human-readable explanations for *why* specific applicants were flagged as high-risk, based on their input features.
+    * **Conversational Interface:** Users could interact with the dashboard using natural language queries (e.g., "Show me all applicants with a Derogatory Count greater than 1"), with Langchain interpreting the query and dynamically filtering the DataFrame.
+    * **Automated Reporting:** Langchain could help generate summary reports or alerts for high-risk applications, potentially integrating with email services to notify relevant stakeholders.
+    """
+)
