@@ -227,7 +227,7 @@ def get_llm_explanation(features_dict: dict, score: float, decision: str):
     """
     
     chatHistory = []
-    chatHistory.append({ "role": "user", "parts": [{ "text": prompt }] }) # Corrected from .push to .append
+    chatHistory.append({ "role": "user", "parts": [{ "text": prompt }] }) 
     
     apiKey = "" 
     apiUrl = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={apiKey}"
@@ -235,7 +235,8 @@ def get_llm_explanation(features_dict: dict, score: float, decision: str):
     try:
         # Define an inner async function to perform the actual fetch
         async def _fetch_explanation_async():
-            response = await st.experimental_memo(fetch)( # `fetch` is assumed to be async
+            # Directly await the global 'fetch' function
+            response = await fetch( 
                 apiUrl,
                 method='POST',
                 headers={'Content-Type': 'application/json'},
@@ -244,13 +245,8 @@ def get_llm_explanation(features_dict: dict, score: float, decision: str):
             return await response.json()
 
         # Run the async fetch operation in the current event loop, or create a new one
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError: # No running loop
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-        result = loop.run_until_complete(_fetch_explanation_async())
+        # This handles the 'await' outside async function error
+        result = asyncio.run(_fetch_explanation_async())
         
         if result and result.get('candidates') and len(result['candidates']) > 0 and \
            result['candidates'][0].get('content') and result['candidates'][0]['content'].get('parts') and \
@@ -722,6 +718,30 @@ if 'scored_data' in st.session_state and not st.session_state['scored_data'].emp
         st.dataframe(summary_stats_df.style.format("{:.2f}"))
 
         st.info("Compare the average values of key features between approved and rejected loans to understand influencing factors.")
+
+        # --- New: Bar chart for Average Statistics ---
+        st.subheader("Visualizing Average Statistics")
+        # Convert the summary_stats_df from wide to long format for Plotly Express
+        summary_stats_long_df = summary_stats_df.reset_index().melt(
+            id_vars='Feature',
+            var_name='Decision Type',
+            value_name='Average Value'
+        )
+
+        fig_avg_stats = px.bar(
+            summary_stats_long_df,
+            x='Feature',
+            y='Average Value',
+            color='Decision Type',
+            barmode='group', # Group bars for each feature
+            title='Average Feature Values by Loan Decision',
+            labels={'Feature': 'Credit Feature', 'Average Value': 'Average Value'},
+            color_discrete_map={'Approved Avg': '#4CAF50', 'Rejected Avg': '#f44336'},
+            text_auto='.2s' # Automatically show values on bars, formatted to 2 significant figures
+        )
+        fig_avg_stats.update_layout(xaxis_tickangle=-45)
+        st.plotly_chart(fig_avg_stats, use_container_width=True)
+
 
     # --- New: LLM Suggestions for Rejected Loans ---
     st.markdown("---")
