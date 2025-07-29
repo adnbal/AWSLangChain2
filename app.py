@@ -136,6 +136,30 @@ if not st.session_state['scored_data'].empty:
     st.subheader("Loan Decision Breakdown")
     st.plotly_chart(px.pie(df_display, names="Decision", title="Decision Breakdown"), use_container_width=True)
 
+    # --- Average Feature Values by Decision (Grouped Bar) ---
+    st.markdown("---")
+    st.subheader("Average Feature Values by Loan Decision")
+
+    avg_features = df_display.groupby('Decision')[NUMERICAL_FEATURES].mean().reset_index()
+    melted_avg = avg_features.melt(id_vars='Decision', var_name='Credit Feature', value_name='Average Value')
+
+    fig_avg = px.bar(
+        melted_avg,
+        x="Credit Feature",
+        y="Average Value",
+        color="Decision",
+        barmode="group",
+        title="Average Feature Values by Loan Decision",
+        text_auto=".2f"
+    )
+
+    fig_avg.update_layout(
+        xaxis_tickangle=-45,
+        legend_title="Decision Type",
+        height=600
+    )
+    st.plotly_chart(fig_avg, use_container_width=True)
+
     # --- Top & Bottom Scores (Ordered Horizontal) ---
     st.markdown("---")
     st.subheader("Top & Bottom Scores Analysis")
