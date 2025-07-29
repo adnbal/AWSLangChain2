@@ -297,7 +297,6 @@ if uploaded_file is not None:
         st.session_state['last_uploaded_s3_key'] = s3_file_key
         # Clear previous analysis data to force re-analysis
         st.session_state['scored_data'] = pd.DataFrame()
-        # No need to set analyze_triggered here, as analysis is now direct
         st.sidebar.info("File uploaded. Please select it from the dropdown below and click 'Analyze'.")
         time.sleep(1) # Give user a moment to read success message
         clear_file_uploader() # Reset uploader widget
@@ -318,6 +317,60 @@ try:
 except Exception as e:
     st.sidebar.warning(f"Could not list files from S3 bucket: {e}. Ensure 'uploads/' prefix exists or bucket is not empty, and permissions are correct.")
     s3_files = []
+
+# --- Function to encapsulate analysis logic ---
+def perform_analysis(file_to_analyze, actual_target_col_name, s3_client, s3_bucket_name):
+    """
+    Performs the credit data analysis, including downloading, scoring, and updating session state.
+    """
+    if not actual_target_col_name:
+        st.error("No target column selected. Please select one from the dropdown.")
+        st.session_state['scored_data'] = pd.DataFrame() # Clear data on error
+        return # Exit the function
+
+    try:
+        with st.spinner(f"Downloading and analyzing '{file_to_analyze}' from S3..."):
+            obj = s3_client.get_object(Bucket=s3_bucket_name, Key=file_to_analyze)
+            df = pd.read_csv(io.BytesIO(obj['Body'].read()))
+            st.write(f"DEBUG: Original columns in loaded CSV: {df.columns.tolist()}")
+
+            # --- CRITICAL FIX: Handle duplicate column name from CSV ---
+            if 'TLDel60Cnt24.1' in df.columns:
+                st.write("DEBUG: Dropping duplicate column 'TLDel60Cnt24.1' found in uploaded CSV.")
+                df = df.drop(columns=['TLDel60Cnt24.1'])
+
+            # Ensure 'ID' column exists for merging later
+            if 'ID' not in df.columns:
+                df['ID'] = df.index.astype(str) + '_idx'
+            else:
+                df['ID'] = df['ID'].astype(str) # Ensure ID is string type
+
+            # Convert target column to numeric and handle NaNs
+            if actual_target_col_name in df.columns:
+                df[actual_target_col_name] = pd.to_numeric(df[actual_target_col_name], errors='coerce').fillna(0).astype(int)
+            else:
+                st.error(f"The selected target column '{actual_target_col_name}' was not found in the uploaded data. Please check your CSV and select the correct column.")
+                st.session_state['scored_data'] = pd.DataFrame() # Clear on error
+                return # Exit the function if target column is missing
+
+            st.write(f"DEBUG: DataFrame columns before passing to ML scoring: {df.columns.tolist()}")
+            results_df = get_credit_score_ml(df.copy(), st.session_state['approval_threshold'], actual_target_col_name)
+            st.write(f"DEBUG: Results DataFrame from ML scoring: {results_df.head()}")
+
+            # Reorder columns to have ID first, then original columns, then Score and Decision
+            if 'ID' in df.columns:
+                cols = ['ID'] + [col for col in df.columns if col != 'ID']
+                df = df[cols]
+
+            df_scored = pd.concat([df, results_df], axis=1)
+            st.session_state['scored_data'] = df_scored
+            st.success(f"Analysis complete for '{file_to_analyze}'.")
+            st.write(f"DEBUG: Final scored_data shape after analysis: {st.session_state['scored_data'].shape}")
+
+    except Exception as e:
+        st.error(f"Error analyzing file from S3: {e}. Please check file format and column names in your CSV file.")
+        st.write(f"Detailed error: {e}") # Provide more detailed error to user
+        st.session_state['scored_data'] = pd.DataFrame() # Clear on error
 
 # --- Analysis Trigger Form ---
 with st.sidebar.form("analysis_trigger_form"):
@@ -377,60 +430,8 @@ with st.sidebar.form("analysis_trigger_form"):
 
     if analyze_submitted:
         if selected_s3_file_in_form and st.session_state['selected_target_column']:
-            file_to_analyze = selected_s3_file_in_form
-            actual_target_col_name = st.session_state['selected_target_column']
-
-            if not actual_target_col_name:
-                st.error("No target column selected. Please select one from the dropdown.")
-            else:
-                try:
-                    with st.spinner(f"Downloading and analyzing '{file_to_analyze}' from S3..."):
-                        obj = s3_client.get_object(Bucket=s3_bucket_name, Key=file_to_analyze)
-                        df = pd.read_csv(io.BytesIO(obj['Body'].read()))
-                        st.write(f"DEBUG: Original columns in loaded CSV: {df.columns.tolist()}")
-
-                        # --- CRITICAL FIX: Handle duplicate column name from CSV ---
-                        # Pandas renames duplicate columns with '.1', '.2', etc.
-                        # We assume the first instance of 'TLDel60Cnt24' is the one we want to use for the model.
-                        # If 'TLDel60Cnt24.1' exists, it means there was a duplicate in the CSV. Drop it.
-                        if 'TLDel60Cnt24.1' in df.columns:
-                            st.write("DEBUG: Dropping duplicate column 'TLDel60Cnt24.1' found in uploaded CSV.")
-                            df = df.drop(columns=['TLDel60Cnt24.1'])
-
-
-                        # Ensure 'ID' column exists for merging later
-                        if 'ID' not in df.columns:
-                            df['ID'] = df.index.astype(str) + '_idx'
-                        else:
-                            df['ID'] = df['ID'].astype(str) # Ensure ID is string type
-
-                        # Convert target column to numeric and handle NaNs
-                        if actual_target_col_name in df.columns:
-                            df[actual_target_col_name] = pd.to_numeric(df[actual_target_col_name], errors='coerce').fillna(0).astype(int)
-                        else:
-                            st.error(f"The selected target column '{actual_target_col_name}' was not found in the uploaded data. Please check your CSV and select the correct column.")
-                            st.session_state['scored_data'] = pd.DataFrame() # Clear on error
-                            return # Exit function early if target column is missing
-
-                        st.write(f"DEBUG: DataFrame columns before passing to ML scoring: {df.columns.tolist()}")
-                        results_df = get_credit_score_ml(df.copy(), st.session_state['approval_threshold'], actual_target_col_name)
-                        st.write(f"DEBUG: Results DataFrame from ML scoring: {results_df.head()}")
-
-                        # Reorder columns to have ID first, then original columns, then Score and Decision
-                        if 'ID' in df.columns:
-                            cols = ['ID'] + [col for col in df.columns if col != 'ID']
-                            df = df[cols]
-
-                        df_scored = pd.concat([df, results_df], axis=1)
-                        st.session_state['scored_data'] = df_scored
-                        st.success(f"Analysis complete for '{file_to_analyze}'.")
-                        st.write(f"DEBUG: Final scored_data shape after analysis: {st.session_state['scored_data'].shape}")
-                        st.rerun() # Force a rerun to display the dashboard with new data
-
-                except Exception as e:
-                    st.error(f"Error analyzing file from S3: {e}. Please check file format and column names in your CSV file.")
-                    st.write(f"Detailed error: {e}") # Provide more detailed error to user
-                    st.session_state['scored_data'] = pd.DataFrame() # Clear on error
+            perform_analysis(selected_s3_file_in_form, st.session_state['selected_target_column'], s3_client, s3_bucket_name)
+            st.rerun() # Force a rerun to display the dashboard with new data
         else:
             st.sidebar.warning("Please select a file and a target column to analyze.")
 
@@ -440,7 +441,6 @@ if not st.session_state['scored_data'].empty:
     if st.sidebar.button("Clear Displayed Data", key="clear_data_button_sidebar"):
         st.session_state['scored_data'] = pd.DataFrame()
         st.session_state['selected_file_for_analysis'] = None
-        # No need to reset analyze_triggered as it's not used in the new flow
         st.sidebar.success("Displayed data cleared.")
         st.rerun()
 
