@@ -68,8 +68,10 @@ def get_credit_score_ml(df_input, approval_threshold):
             df[col] = 0.0
     for col in NUMERICAL_FEATURES:
         df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
     probabilities = model_pipeline.predict_proba(df[NUMERICAL_FEATURES])
     scores = probabilities[:, 0] * 100
+    scores = np.clip(scores, 0, 100)  # Force valid range
     decisions = np.where(scores >= approval_threshold, "Approved", "Rejected")
     return pd.DataFrame({'Score': scores, 'Decision': decisions})
 
@@ -115,6 +117,11 @@ if uploaded_file is not None:
 
 if not st.session_state['scored_data'].empty:
     df_display = st.session_state['scored_data']
+
+    # Debug Scores
+    st.write("DEBUG: Score Summary", df_display['Score'].describe())
+    st.write("DEBUG: Sample Scores", df_display[['ID', 'Score']].head(10))
+
     st.subheader("Dashboard")
     st.dataframe(df_display.head())
 
@@ -127,22 +134,22 @@ if not st.session_state['scored_data'].empty:
     col2.metric("Approved", approved)
     col3.metric("Approval Rate", f"{approval_rate:.2f}%")
 
-    # --- Charts ---
+    # --- Score Distribution ---
     st.markdown("---")
     st.subheader("Credit Score Distribution")
-    st.plotly_chart(px.histogram(df_display, x="Score", nbins=20, title="Score Distribution"), use_container_width=True)
+    st.plotly_chart(px.histogram(df_display, x="Score", nbins=20, title="Score Distribution", color_discrete_sequence=['#4CAF50']), use_container_width=True)
 
+    # --- Loan Decision Pie ---
     st.subheader("Loan Decision Breakdown")
-    st.plotly_chart(px.pie(df_display, names="Decision", title="Decision Breakdown"), use_container_width=True)
+    st.plotly_chart(px.pie(df_display, names="Decision", title="Decision Breakdown", color_discrete_sequence=['#66BB6A', '#EF5350']), use_container_width=True)
 
-    # --- Average Feature Values by Decision (Split by Scale) ---
+    # --- Average Feature Values by Decision ---
     st.markdown("---")
     st.subheader("Average Feature Values by Loan Decision (Split by Scale)")
 
     avg_features = df_display.groupby('Decision')[NUMERICAL_FEATURES].mean().reset_index()
     melted_avg = avg_features.melt(id_vars='Decision', var_name='Credit Feature', value_name='Average Value')
 
-    # Define feature groups
     group_1 = ['DerogCnt', 'CollectCnt', 'BanruptcyInd', 'InqCnt06', 'InqFinanceCnt24',
                'TLCnt03', 'TLCnt12', 'TLCnt24', 'TLCnt', 'TLSatCnt', 'TLDel60Cnt', 'TLBadCnt24',
                'TL75UtilCnt', 'TL50UtilCnt', 'TLDel3060Cnt24', 'TLDel90Cnt24', 'TLDel60CntAll',
@@ -152,21 +159,13 @@ if not st.session_state['scored_data'].empty:
 
     def plot_group(features, title):
         subset = melted_avg[melted_avg['Credit Feature'].isin(features)]
-        fig = px.bar(
-            subset,
-            x="Credit Feature",
-            y="Average Value",
-            color="Decision",
-            barmode="group",
-            text_auto=".2f",
-            title=title
-        )
+        fig = px.bar(subset, x="Credit Feature", y="Average Value", color="Decision", barmode="group", text_auto=".2f", title=title)
         fig.update_layout(xaxis_tickangle=-45, legend_title="Decision Type", height=500)
         st.plotly_chart(fig, use_container_width=True)
 
-    plot_group(group_1, "Average Counts & Indicators by Loan Decision")
-    plot_group(group_2, "Average Time & Percentage Features by Loan Decision")
-    plot_group(group_3, "Average Monetary Features by Loan Decision")
+    plot_group(group_1, "Average Counts & Indicators")
+    plot_group(group_2, "Average Time & Percentages")
+    plot_group(group_3, "Average Monetary Features")
 
     # --- Improved Top & Bottom Scores ---
     st.markdown("---")
@@ -175,46 +174,31 @@ if not st.session_state['scored_data'].empty:
     top_scores = df_display.sort_values(by="Score", ascending=False).head(10)
     bottom_scores = df_display.sort_values(by="Score", ascending=True).head(10)
 
-    # Top Scores Chart
-    fig_top = px.bar(
-        top_scores.sort_values(by="Score", ascending=True),
-        x="Score", y="ID",
-        orientation="h",
-        title="Top 10 Highest Credit Scores",
-        text="Score"
-    )
-    fig_top.update_traces(texttemplate='%{text:.2f}', textposition='inside', marker_color='green')
-    fig_top.update_layout(
-        xaxis_title="Credit Score", yaxis_title="Applicant ID",
-        plot_bgcolor="#111", paper_bgcolor="#111",
-        font=dict(color="white"), xaxis=dict(showgrid=False), yaxis=dict(showgrid=False)
-    )
-    st.plotly_chart(fig_top, use_container_width=True)
+    if top_scores['Score'].sum() == 0 and bottom_scores['Score'].sum() == 0:
+        st.warning("Scores are zero or invalid. Please check your input data format.")
+    else:
+        # Top Scores
+        fig_top = px.bar(top_scores.sort_values(by="Score"), x="Score", y="ID", orientation="h",
+                         title="Top 10 Highest Credit Scores", text="Score",
+                         color_discrete_sequence=["green"])
+        fig_top.update_traces(texttemplate='%{text:.2f}', textposition='inside')
+        st.plotly_chart(fig_top, use_container_width=True)
 
-    # Bottom Scores Chart
-    fig_bottom = px.bar(
-        bottom_scores.sort_values(by="Score", ascending=True),
-        x="Score", y="ID",
-        orientation="h",
-        title="Top 10 Lowest Credit Scores",
-        text="Score"
-    )
-    fig_bottom.update_traces(texttemplate='%{text:.2f}', textposition='inside', marker_color='red')
-    fig_bottom.update_layout(
-        xaxis_title="Credit Score", yaxis_title="Applicant ID",
-        plot_bgcolor="#111", paper_bgcolor="#111",
-        font=dict(color="white"), xaxis=dict(showgrid=False), yaxis=dict(showgrid=False)
-    )
-    st.plotly_chart(fig_bottom, use_container_width=True)
+        # Bottom Scores
+        fig_bottom = px.bar(bottom_scores.sort_values(by="Score"), x="Score", y="ID", orientation="h",
+                            title="Top 10 Lowest Credit Scores", text="Score",
+                            color_discrete_sequence=["red"])
+        fig_bottom.update_traces(texttemplate='%{text:.2f}', textposition='inside')
+        st.plotly_chart(fig_bottom, use_container_width=True)
 
     # --- Summary Statistics ---
     st.markdown("---")
-    st.subheader("Summary Statistics for Credit Scores")
+    st.subheader("Summary Statistics")
     summary_stats = df_display['Score'].describe().to_frame().rename(columns={'Score': 'Value'})
     summary_stats.loc['approval_rate'] = approval_rate
     st.dataframe(summary_stats.style.format("{:.2f}"))
 
-    # --- Explanations for Rejected Loans ---
+    # --- Explanations ---
     st.markdown("---")
     st.subheader("AI Explanations for Rejected Loans")
     rejected = df_display[df_display['Decision'] == 'Rejected']
