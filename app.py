@@ -8,6 +8,7 @@ import os
 import time # For a small delay
 import json # For parsing LLM structured output
 import asyncio # For running async functions in a synchronous context
+import requests # NEW: For making HTTP requests to the LLM API
 
 # Import scikit-learn components
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
@@ -39,6 +40,17 @@ NUMERICAL_FEATURES = [
     'TLDel90Cnt24', 'TLDel60CntAll', 'TLOpenPct', 'TLBadDerogCnt', 'TLOpen24Pct'
 ]
 CATEGORICAL_FEATURES = [] # No explicit categorical features based on previous analysis
+
+# Define numerical features specifically for plotting average statistics (excluding TLTimeFirst)
+NUMERICAL_FEATURES_FOR_PLOTTING = [
+    'DerogCnt', 'CollectCnt', 'BanruptcyInd', 'InqCnt06', 'InqTimeLast', 'InqFinanceCnt24',
+    # 'TLTimeFirst' is excluded from plotting here to improve scaling
+    'TLTimeLast', 'TLCnt03', 'TLCnt12', 'TLCnt24', 'TLCnt',
+    'TLSum', 'TLMaxSum', 'TLSatCnt', 'TLDel60Cnt', 'TLBadCnt24',
+    'TL75UtilCnt', 'TL50UtilCnt', 'TLBalHCPct', 'TLSatPct', 'TLDel3060Cnt24',
+    'TLDel90Cnt24', 'TLDel60CntAll', 'TLOpenPct', 'TLBadDerogCnt', 'TLOpen24Pct'
+]
+
 
 # Target column name is 'default' (lowercase)
 TARGET_COLUMN = 'default' 
@@ -209,11 +221,10 @@ def get_credit_score_ml(df_input: pd.DataFrame, approval_threshold: int, actual_
     return pd.DataFrame({'Score': scores, 'Decision': decisions})
 
 
-# --- LLM Integration for Explanations (MODIFIED TO BE SYNCHRONOUS) ---
+# --- LLM Integration for Explanations (MODIFIED TO USE requests) ---
 def get_llm_explanation(features_dict: dict, score: float, decision: str):
     """
-    Calls a Gemini LLM to get an explanation for a loan decision.
-    This function is now synchronous and uses asyncio.run() internally for the fetch call.
+    Calls a Gemini LLM to get an explanation for a loan decision using requests.
     """
     prompt = f"""
     You are an expert credit risk analyst. Based on the following loan application features, 
@@ -233,20 +244,15 @@ def get_llm_explanation(features_dict: dict, score: float, decision: str):
     apiUrl = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={apiKey}"
     
     try:
-        # Define an inner async function to perform the actual fetch
-        async def _fetch_explanation_async():
-            # Directly await the global 'fetch' function
-            response = await fetch( 
-                apiUrl,
-                method='POST',
-                headers={'Content-Type': 'application/json'},
-                body=json.dumps({"contents": chatHistory})
-            )
-            return await response.json()
-
-        # Run the async fetch operation in the current event loop, or create a new one
-        # This handles the 'await' outside async function error
-        result = asyncio.run(_fetch_explanation_async())
+        # Using requests.post for the HTTP call
+        response = requests.post(
+            apiUrl,
+            headers={'Content-Type': 'application/json'},
+            json={"contents": chatHistory} # Use json parameter for dictionary payload
+        )
+        response.raise_for_status() # Raise an exception for HTTP errors (e.g., 4xx or 5xx)
+        
+        result = response.json()
         
         if result and result.get('candidates') and len(result['candidates']) > 0 and \
            result['candidates'][0].get('content') and result['candidates'][0]['content'].get('parts') and \
@@ -254,8 +260,14 @@ def get_llm_explanation(features_dict: dict, score: float, decision: str):
             return result['candidates'][0]['content']['parts'][0]['text']
         else:
             return "LLM could not generate an explanation."
-    except Exception as e:
+    except requests.exceptions.RequestException as e:
         st.error(f"Error calling LLM for explanation: {e}")
+        return "Failed to get explanation from LLM."
+    except json.JSONDecodeError:
+        st.error("Failed to decode JSON response from LLM API.")
+        return "Failed to get explanation from LLM (JSON decode error)."
+    except Exception as e:
+        st.error(f"An unexpected error occurred while calling LLM: {e}")
         return "Failed to get explanation from LLM."
 
 
@@ -700,8 +712,8 @@ if 'scored_data' in st.session_state and not st.session_state['scored_data'].emp
 
     st.subheader("Average Statistics for Approved vs. Rejected Loans")
 
-    # Select only numerical features for mean calculation
-    features_for_stats = [col for col in NUMERICAL_FEATURES if col in df_display.columns]
+    # Select numerical features for mean calculation (using the list *without* TLTimeFirst for plotting)
+    features_for_stats = [col for col in NUMERICAL_FEATURES_FOR_PLOTTING if col in df_display.columns]
 
     if not features_for_stats:
         st.info("No numerical features available for calculating average statistics.")
@@ -783,12 +795,4 @@ st.markdown(
     * **Machine Learning Model Hosting (SageMaker):** In a real scenario, the `get_credit_score_ml` function would call a sophisticated ML model deployed on AWS SageMaker for more accurate and robust predictions. This separates the heavy computation from the Streamlit app.
     * **Serverless Functions (Lambda):** Could be used for automated processing of new files uploaded to S3 (e.g., triggering the scoring process automatically).
     * **Authentication & Authorization (Cognito):** For secure user access to the app and S3, ensuring only authorized users can upload or view sensitive data.
-    * **Logging & Monitoring (CloudWatch):** To track app performance, S3 interactions, and potential errors, providing insights for operational management.
-
-    ### 🔗 Langchain Integration:
-    Langchain is primarily used for building applications with Large Language Models (LLMs). It could enhance this application in several ways:
-    * **Explainable AI (XAI):** After identifying rejected applicants, Langchain could prompt an LLM to generate more detailed, human-readable explanations for *why* specific applicants were flagged as high-risk, based on their input features.
-    * **Conversational Interface:** Users could interact with the dashboard using natural language queries (e.g., "Show me all applicants with a Derogatory Count greater than 1"), with Langchain interpreting the query and dynamically filtering the DataFrame.
-    * **Automated Reporting:** Langchain could help generate summary reports or alerts for high-risk applications, potentially integrating with email services to notify relevant stakeholders.
-    """
-)
+    * **Logging & Monitoring (CloudWatc
