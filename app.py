@@ -8,9 +8,14 @@ import plotly.express as px
 # --- Session State ---
 st.session_state.setdefault('scored_data', pd.DataFrame())
 
-# --- Sidebar Threshold Slider ---
-st.sidebar.header("Settings")
-approval_threshold = st.sidebar.slider("Set Approval Threshold", 0, 100, 50, 1)
+# --- Page Setup ---
+st.set_page_config(page_title="Credit Scoring Dashboard", layout="wide")
+st.title("📊 Credit Scoring Dashboard with Adjustable Threshold")
+
+# --- Threshold Slider in Main Layout ---
+st.markdown("### 🔍 Set Approval Threshold")
+approval_threshold = st.slider("Adjust the threshold for loan approval", 0, 100, 50, 1)
+st.write(f"Current Approval Threshold: **{approval_threshold}%**")
 st.session_state['approval_threshold'] = approval_threshold
 
 # --- Define Features ---
@@ -31,11 +36,10 @@ def get_credit_score_realistic(df_input):
     for col in missing_cols:
         df[col] = 0
 
-    # Simulate realistic credit scores (mean ~75, std dev 10)
+    # Simulate realistic credit scores
     np.random.seed(42)
     scores = np.random.normal(75, 10, len(df))  # Mean 75, std dev 10
     scores = np.clip(scores, 0, 100)
-
     return scores
 
 # --- LLM Explanation (Optional) ---
@@ -60,12 +64,8 @@ def get_llm_explanation(features_dict, score, decision):
     except:
         return "Explanation unavailable."
 
-# --- Streamlit Layout ---
-st.set_page_config(page_title="Credit Scoring Dashboard", layout="wide")
-st.title("Credit Scoring Dashboard with Adjustable Threshold")
-
 # --- File Upload ---
-uploaded_file = st.file_uploader("Upload Credit Data (CSV or Excel)", type=["csv", "xlsx"])
+uploaded_file = st.file_uploader("📂 Upload Credit Data (CSV or Excel)", type=["csv", "xlsx"])
 
 if uploaded_file is not None:
     if uploaded_file.name.endswith('.xlsx'):
@@ -90,8 +90,8 @@ if not st.session_state['scored_data'].empty:
     df_display = st.session_state['scored_data']
     df_display['Score'] = pd.to_numeric(df_display['Score'], errors='coerce').fillna(0)
 
-    # Metrics
-    st.subheader("Dashboard")
+    # --- Metrics ---
+    st.markdown("### 📈 Dashboard Overview")
     col1, col2, col3 = st.columns(3)
     total = len(df_display)
     approved = (df_display['Decision'] == 'Approved').sum()
@@ -102,18 +102,18 @@ if not st.session_state['scored_data'].empty:
 
     # --- Score Distribution ---
     st.markdown("---")
-    st.subheader("Credit Score Distribution")
+    st.subheader("📊 Credit Score Distribution")
     fig_hist = px.histogram(df_display, x="Score", nbins=20, title="Distribution of Credit Scores", color_discrete_sequence=['#4CAF50'])
     st.plotly_chart(fig_hist, use_container_width=True)
 
-    # --- Decision Pie Chart ---
-    st.subheader("Loan Decision Breakdown")
+    # --- Loan Decision Pie Chart ---
+    st.subheader("📌 Loan Decision Breakdown")
     fig_pie = px.pie(df_display, names="Decision", title="Proportion of Approved vs Rejected", color_discrete_sequence=['#66BB6A', '#EF5350'])
     st.plotly_chart(fig_pie, use_container_width=True)
 
     # --- Top & Bottom Scores ---
     st.markdown("---")
-    st.subheader("Top & Bottom Scores Analysis")
+    st.subheader("🏆 Top & Bottom Scores Analysis")
 
     top_scores = df_display.sort_values(by="Score", ascending=False).head(10)
     bottom_scores = df_display.sort_values(by="Score", ascending=True).head(10)
@@ -137,14 +137,14 @@ if not st.session_state['scored_data'].empty:
 
     # --- Summary Stats ---
     st.markdown("---")
-    st.subheader("Summary Statistics for Credit Scores")
+    st.subheader("📑 Summary Statistics for Credit Scores")
     summary_stats = df_display['Score'].describe().to_frame().rename(columns={'Score': 'Value'})
     summary_stats.loc['approval_rate'] = approval_rate
     st.dataframe(summary_stats.style.format("{:.2f}"))
 
     # --- AI Explanations for Rejected Loans ---
     st.markdown("---")
-    st.subheader("AI Explanations for Rejected Loans")
+    st.subheader("🤖 AI Explanations for Rejected Loans")
     rejected = df_display[df_display['Decision'] == 'Rejected']
     if not rejected.empty:
         for _, row in rejected.iterrows():
@@ -153,6 +153,6 @@ if not st.session_state['scored_data'].empty:
                 explanation = get_llm_explanation(features_dict, row['Score'], row['Decision'])
                 st.write(explanation)
     else:
-        st.info("No rejected loans at the current threshold.")
+        st.info("✅ No rejected loans at the current threshold.")
 else:
-    st.info("Upload a CSV or Excel file to start analysis.")
+    st.info("📤 Upload a CSV or Excel file to start analysis.")
