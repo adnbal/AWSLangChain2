@@ -6,18 +6,19 @@ import datetime
 import random
 import json
 from collections import deque
+import requests # For making HTTP requests to the LLM API (if enabled)
 
-# Mock AWS S3 client and boto3 for demonstration purposes
+# --- Mock AWS S3 client and boto3 for demonstration purposes ---
 class MockS3Client:
     def __init__(self):
-        self.buckets = {"my-langchain-demo-bucket": {}}
+        self.buckets = {"my-langchain-demo-bucket": {}} # Initialize with a default bucket
 
     def upload_fileobj(self, file_obj, bucket, key):
         if bucket not in self.buckets:
             self.buckets[bucket] = {}
         self.buckets[bucket][key] = file_obj.read()
         file_obj.seek(0) # Reset file pointer after reading
-        st.success(f"File '{key}' uploaded to S3 bucket '{bucket}' successfully!")
+        # st.success(f"File '{key}' uploaded to S3 bucket '{bucket}' successfully!") # Removed for less clutter
 
     def list_objects_v2(self, Bucket, Prefix=''):
         if Bucket not in self.buckets:
@@ -33,263 +34,641 @@ class MockS3Client:
             raise Exception(f"File '{Key}' not found in bucket '{Bucket}'")
         return {'Body': io.BytesIO(self.buckets[Bucket][Key])}
 
-# Initialize mock S3 client
-s3_client = MockS3Client()
+# Initialize MockS3Client only once and store in session state
+if 's3_client' not in st.session_state:
+    st.session_state.s3_client = MockS3Client()
+s3_client = st.session_state.s3_client
 
-# --- Simulated ML Model (Neural Network) and Preprocessor ---
-class Preprocessor:
-    def __init__(self):
-        # Example: scaling parameters (replace with actual trained values)
-        self.mean_features = {'Age': 40, 'Income': 50000, 'LoanAmount': 15000, 'CreditScore': 700, 'EmploymentYears': 10, 'DebtToIncome': 0.3, 'NumCreditLines': 3, 'NumLatePayments': 1, 'InterestRate': 0.08, 'LoanTerm': 36, 'TLSCatPct': 0.96}
-        self.std_features = {'Age': 10, 'Income': 20000, 'LoanAmount': 5000, 'CreditScore': 50, 'EmploymentYears': 5, 'DebtToIncome': 0.1, 'NumCreditLines': 1, 'NumLatePayments': 1, 'InterestRate': 0.02, 'LoanTerm': 12, 'TLSCatPct': 0.01}
-        self.categorical_cols = ['Education', 'MaritalStatus', 'HasMortgage', 'HasDependents', 'LoanPurpose']
-        self.categories = {
-            'Education': ['High School', 'Bachelors', 'Masters', 'PhD'],
-            'MaritalStatus': ['Single', 'Married', 'Divorced'],
-            'HasMortgage': [0, 1],
-            'HasDependents': [0, 1],
-            'LoanPurpose': ['Auto', 'Home', 'Education', 'Debt Consolidation', 'Other']
+# --- Import scikit-learn components ---
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.neural_network import MLPClassifier 
+from sklearn.pipeline import Pipeline
+from sklearn.impute import SimpleImputer 
+
+# --- Import Plotly for visualizations ---
+import plotly.express as px
+
+# --- Initialize session state variables using setdefault for robustness ---
+st.session_state.setdefault('scored_data', pd.DataFrame())
+st.session_state.setdefault('last_uploaded_s3_key', None)
+st.session_state.setdefault('file_uploader_key', 0) 
+st.session_state.setdefault('approval_threshold', 50) # Default approval threshold
+st.session_state.setdefault('uploaded_df_columns', []) # To store columns of the last uploaded file
+st.session_state.setdefault('selected_target_column', 'TARGET') # Default target column name is 'TARGET' for credit.csv
+
+# --- Define Feature Columns for the 'credit.csv' dataset ---
+# This list MUST match the features the model expects, and accounts for the duplicate column in your CSV.
+NUMERICAL_FEATURES = [
+    'DerogCnt', 'CollectCnt', 'BanruptcyInd', 'InqCnt06', 'InqTimeLast', 'InqFinanceCnt24',
+    'TLTimeFirst', 'TLTimeLast', 'TLCnt03', 'TLCnt12', 'TLCnt24', 'TLCnt',
+    'TLSum', 'TLMaxSum', 'TLSatCnt', 'TLDel60Cnt', 'TLDel60Cnt24', # Corrected: TLDel60Cnt24 is here once
+    'TLBadCnt24', 'TL75UtilCnt', 'TL50UtilCnt', 'TLBalHCPct', 'TLSatPct', 'TLDel3060Cnt24',
+    'TLDel90Cnt24', 'TLDel60CntAll', 'TLOpenPct', 'TLBadDerogCnt', 'TLOpen24Pct'
+]
+CATEGORICAL_FEATURES = [] # No explicit categorical features based on previous analysis
+
+# Define numerical features specifically for plotting average statistics (excluding TLTimeFirst)
+# These groups were introduced to address scaling issues in the "Average Statistics" graph
+GROUP_1_COUNTS_INDICATORS = [
+    'DerogCnt', 'CollectCnt', 'BanruptcyInd', 'InqCnt06', 'InqFinanceCnt24',
+    'TLCnt03', 'TLCnt12', 'TLCnt24', 'TLCnt', 'TLSatCnt', 'TLDel60Cnt',
+    'TLBadCnt24', 'TL75UtilCnt', 'TL50UtilCnt', 'TLDel3060Cnt24',
+    'TLDel90Cnt24', 'TLDel60CntAll', 'TLBadDerogCnt', 'TLDel60Cnt24' # Added TLDel60Cnt24 here for plotting
+]
+
+GROUP_2_TIME_PERCENTAGES = [
+    'InqTimeLast', 'TLTimeLast', 'TLBalHCPct', 'TLSatPct', 'TLOpenPct', 'TLOpen24Pct'
+]
+
+GROUP_3_SUMS_MAXSUMS = [
+    'TLSum', 'TLMaxSum'
+]
+
+
+# Dummy target column name for model training
+DUMMY_TARGET_COLUMN_NAME = 'TARGET' 
+
+# --- Simulate Model Training and Preprocessing ---
+# This dummy data is significantly expanded and designed to force the model
+# to learn patterns for both defaulting (1) and non-defaulting (0) cases.
+# It includes more varied values and clearer distinctions.
+# Added 'ID' column to dummy data for consistency with actual data structure
+dummy_data_for_training = pd.concat([
+    pd.DataFrame({
+        'ID': [f'Good_ID_{i}' for i in range(20)], # Add dummy IDs
+        'DerogCnt': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        'CollectCnt': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        'BanruptcyInd': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        'InqCnt06': [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0],
+        'InqTimeLast': [100, 120, 110, 130, 90, 115, 125, 105, 95, 135, 100, 120, 110, 130, 90, 115, 125, 105, 95, 135],
+        'InqFinanceCnt24': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        'TLTimeFirst': [200, 250, 220, 280, 180, 230, 260, 210, 190, 290, 200, 250, 220, 280, 180, 230, 260, 210, 190, 290],
+        'TLTimeLast': [30, 40, 35, 45, 25, 38, 42, 32, 28, 48, 30, 40, 35, 45, 25, 38, 42, 32, 28, 48],
+        'TLCnt03': [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0],
+        'TLCnt12': [3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2],
+        'TLCnt24': [5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4],
+        'TLCnt': [10, 8, 10, 8, 10, 8, 10, 8, 10, 8, 10, 8, 10, 8, 10, 8, 10, 8, 10, 8],
+        'TLSum': [50000, 60000, 55000, 65000, 45000, 58000, 62000, 52000, 48000, 68000, 50000, 60000, 55000, 65000, 45000, 58000, 62000, 52000, 48000, 68000],
+        'TLMaxSum': [15000, 18000, 16000, 20000, 12000, 17000, 19000, 14000, 13000, 22000, 15000, 18000, 16000, 20000, 12000, 17000, 19000, 14000, 13000, 22000],
+        'TLSatCnt': [8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9],
+        'TLDel60Cnt': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        'TLDel60Cnt24': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], # Added to dummy data
+        'TLBadCnt24': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        'TL75UtilCnt': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        'TL50UtilCnt': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        'TLBalHCPct': [0.2, 0.15, 0.25, 0.18, 0.3, 0.22, 0.19, 0.28, 0.21, 0.17, 0.2, 0.15, 0.25, 0.18, 0.3, 0.22, 0.19, 0.28, 0.21, 0.17],
+        'TLSatPct': [0.95, 0.98, 0.96, 0.97, 0.94, 0.97, 0.95, 0.98, 0.96, 0.97, 0.95, 0.98, 0.96, 0.97, 0.94, 0.97, 0.95, 0.98, 0.96, 0.97],
+        'TLDel3060Cnt24': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        'TLDel90Cnt24': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        'TLDel60CntAll': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        'TLOpenPct': [0.8, 0.75, 0.82, 0.78, 0.85, 0.79, 0.81, 0.77, 0.83, 0.76, 0.8, 0.75, 0.82, 0.78, 0.85, 0.79, 0.81, 0.77, 0.83, 0.76],
+        'TLBadDerogCnt': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        'TLOpen24Pct': [0.9, 0.88, 0.92, 0.89, 0.95, 0.91, 0.93, 0.87, 0.94, 0.90, 0.9, 0.88, 0.92, 0.89, 0.95, 0.91, 0.93, 0.87, 0.94, 0.90],
+        DUMMY_TARGET_COLUMN_NAME: [0] * 20
+    }),
+    pd.DataFrame({ # Bad applicants (TARGET = 1) - high derogatory, low credit age, high inquiries
+        'ID': [f'Bad_ID_{i}' for i in range(10)], # Add dummy IDs
+        'DerogCnt': [1, 2, 3, 1, 2, 3, 1, 2, 3, 1],
+        'CollectCnt': [1, 1, 2, 1, 1, 2, 1, 1, 2, 1],
+        'BanruptcyInd': [0, 1, 0, 1, 0, 1, 0, 1, 0, 1],
+        'InqCnt06': [5, 4, 6, 5, 4, 6, 5, 4, 6, 5],
+        'InqTimeLast': [10, 20, 15, 25, 12, 18, 22, 14, 28, 16],
+        'InqFinanceCnt24': [2, 3, 4, 2, 3, 4, 2, 3, 4, 2],
+        'TLTimeFirst': [50, 40, 60, 35, 70, 45, 55, 30, 65, 38],
+        'TLTimeLast': [5, 8, 6, 9, 4, 7, 10, 3, 11, 5],
+        'TLCnt03': [2, 3, 4, 2, 3, 4, 2, 3, 4, 2],
+        'TLCnt12': [6, 7, 8, 6, 7, 8, 6, 7, 8, 6],
+        'TLCnt24': [10, 12, 15, 10, 12, 15, 10, 12, 15, 10],
+        'TLCnt': [15, 18, 20, 15, 18, 20, 15, 18, 20, 15],
+        'TLSum': [20000, 25000, 18000, 30000, 22000, 28000, 21000, 26000, 23000, 29000],
+        'TLMaxSum': [5000, 7000, 4000, 8000, 6000, 7500, 5500, 6500, 4500, 8500],
+        'TLSatCnt': [2, 3, 1, 4, 2, 3, 1, 4, 2, 3],
+        'TLDel60Cnt': [1, 2, 1, 2, 1, 2, 1, 2, 1, 2],
+        'TLDel60Cnt24': [1, 2, 3, 1, 2, 3, 1, 2, 3, 1], # Added to dummy data
+        'TLBadCnt24': [1, 1, 2, 1, 1, 2, 1, 1, 2, 1],
+        'TL75UtilCnt': [3, 4, 2, 5, 3, 4, 2, 5, 3, 4],
+        'TL50UtilCnt': [5, 6, 4, 7, 5, 6, 4, 7, 5, 6],
+        'TLBalHCPct': [0.8, 0.85, 0.75, 0.9, 0.78, 0.82, 0.79, 0.88, 0.81, 0.86],
+        'TLSatPct': [0.5, 0.4, 0.6, 0.3, 0.55, 0.45, 0.65, 0.35, 0.58, 0.48],
+        'TLDel3060Cnt24': [1, 2, 1, 2, 1, 2, 1, 2, 1, 2],
+        'TLDel90Cnt24': [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        'TLDel60CntAll': [2, 3, 2, 3, 2, 3, 2, 3, 2, 3],
+        'TLOpenPct': [0.2, 0.15, 0.25, 0.1, 0.22, 0.18, 0.28, 0.12, 0.21, 0.17],
+        'TLBadDerogCnt': [1, 2, 1, 2, 1, 2, 1, 2, 1, 2],
+        'TLOpen24Pct': [0.3, 0.25, 0.35, 0.2, 0.32, 0.28, 0.38, 0.22, 0.31, 0.27],
+        DUMMY_TARGET_COLUMN_NAME: [1] * 10
+    })
+], ignore_index=True)
+
+
+# Define preprocessing steps
+numerical_transformer = Pipeline(steps=[
+    ('imputer', SimpleImputer(strategy='mean')), 
+    ('scaler', StandardScaler())
+])
+
+categorical_transformer = Pipeline(steps=[
+    ('imputer', SimpleImputer(strategy='constant', fill_value='missing_category')), 
+    ('onehot', OneHotEncoder(handle_unknown='ignore'))
+])
+
+preprocessor = ColumnTransformer(
+    transformers=[
+        ('num', numerical_transformer, NUMERICAL_FEATURES),
+        *((('cat', categorical_transformer, CATEGORICAL_FEATURES),) if CATEGORICAL_FEATURES else ())
+    ])
+
+# Create a pipeline: preprocess then apply MLPClassifier (Neural Network)
+model_pipeline = Pipeline(steps=[
+    ('preprocessor', preprocessor),
+    ('classifier', MLPClassifier(hidden_layer_sizes=(100, 50), max_iter=500, random_state=42, early_stopping=True, n_iter_no_change=50)) 
+])
+
+# "Fit" the pipeline on the dummy data
+try:
+    # Ensure dummy_features exist in dummy_data_for_training before fitting
+    # Exclude 'ID' from features used for training the model
+    dummy_features_for_training = [col for col in NUMERICAL_FEATURES + CATEGORICAL_FEATURES if col != 'ID']
+    
+    missing_dummy_features = [col for col in dummy_features_for_training if col not in dummy_data_for_training.columns]
+    if missing_dummy_features:
+        st.sidebar.error(f"Missing dummy features for model training: {missing_dummy_features}. Please check dummy_data_for_training.")
+        st.stop()
+
+    model_pipeline.fit(dummy_data_for_training[dummy_features_for_training], dummy_data_for_training[DUMMY_TARGET_COLUMN_NAME])
+    st.sidebar.success("Simulated ML model (Neural Network) and preprocessor initialized for new data.")
+except Exception as e:
+    st.sidebar.error(f"Error initializing simulated ML model: {e}")
+    st.stop() 
+
+# --- Credit Scoring Function using the ML Model ---
+@st.cache_data 
+def get_credit_score_ml(df_input: pd.DataFrame, approval_threshold: int, actual_target_column: str): 
+    """
+    Applies the simulated ML model to score a DataFrame of credit applications.
+    Performs robust NaN handling and type coercion before passing to the ML pipeline.
+    """
+    df_processed = df_input.copy()
+
+    # --- IMPORTANT: Handle duplicate column name from CSV ---
+    # Pandas renames duplicate columns with '.1', '.2', etc.
+    # We assume the first instance of 'TLDel60Cnt24' is the one we want to use for the model.
+    # If 'TLDel60Cnt24.1' exists, it means there was a duplicate in the CSV. Drop it.
+    if 'TLDel60Cnt24.1' in df_processed.columns:
+        st.write("DEBUG: Dropping duplicate column 'TLDel60Cnt24.1' found in uploaded CSV.")
+        df_processed = df_processed.drop(columns=['TLDel60Cnt24.1'])
+
+
+    # Define features to be used for prediction (excluding the actual target column and 'ID')
+    features_for_prediction = [col for col in NUMERICAL_FEATURES + CATEGORICAL_FEATURES if col != actual_target_column and col != 'ID']
+
+    # Ensure all expected feature columns exist. Add if missing with default values.
+    for col in features_for_prediction:
+        if col not in df_processed.columns:
+            if col in NUMERICAL_FEATURES:
+                df_processed[col] = 0.0 
+            elif col in CATEGORICAL_FEATURES:
+                df_processed[col] = 'missing_category' 
+    
+    # Coerce numerical columns to numeric type, converting any non-numeric values to NaN
+    for col in NUMERICAL_FEATURES:
+        if col in df_processed.columns: # Only process if column exists after previous checks
+            df_processed[col] = pd.to_numeric(df_processed[col], errors='coerce') 
+            df_processed[col] = df_processed[col].fillna(df_processed[col].mean() if not df_processed[col].empty else 0.0) # Fill NaNs after conversion
+
+    # Explicitly fill NaNs in categorical columns and ensure they are string type
+    for col in CATEGORICAL_FEATURES:
+        if col in df_processed.columns: # Only process if column exists after previous checks
+            df_processed[col] = df_processed[col].astype(str).replace('nan', 'missing_category')
+            df_processed[col] = df_processed[col].fillna('missing_category') 
+
+    # Select and reorder columns to match the training order
+    # Ensure only the actual features are passed to the model
+    df_processed_for_prediction = df_processed[features_for_prediction]
+
+    st.write("DEBUG: DataFrame info before ML prediction:")
+    buffer = io.StringIO()
+    df_processed_for_prediction.info(buf=buffer)
+    st.text(buffer.getvalue())
+    st.write(f"DEBUG: Total NaNs in data before prediction: {df_processed_for_prediction.isnull().sum().sum()}")
+    st.write(f"DEBUG: Columns used for prediction: {df_processed_for_prediction.columns.tolist()}")
+
+
+    probabilities = model_pipeline.predict_proba(df_processed_for_prediction)
+    
+    # Assuming class 0 (index 0) is "Good" and class 1 (index 1) is "Bad" (Default)
+    # So, score is probability of NOT defaulting (Class 0)
+    scores = probabilities[:, 0] * 100 
+
+    decisions = np.where(scores >= approval_threshold, "Approved", "Rejected") 
+
+    return pd.DataFrame({'Score': scores, 'Decision': decisions})
+
+
+# --- LLM Integration for Explanations ---
+def get_llm_explanation(features_dict: dict, score: float, decision: str):
+    """
+    Calls an OpenAI LLM to get an explanation for a loan decision using requests.
+    """
+    prompt = f"""
+    You are an expert credit risk analyst. Based on the following loan application features, 
+    explain concisely why this loan received a score of {score:.2f} and was {decision}.
+    Focus on 2-3 key factors from the provided features that likely influenced the decision.
+    
+    Loan Features:
+    {json.dumps(features_dict, indent=2)}
+    
+    Provide a brief, clear explanation (max 50 words).
+    """
+    
+    try:
+        # Corrected access to OpenAI API key from Streamlit secrets
+        openai_api_key = st.secrets["openai"]["api_key"]
+        
+        # OpenAI API endpoint for chat completions
+        apiUrl = "https://api.openai.com/v1/chat/completions"
+        
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {openai_api_key}"
         }
+        
+        payload = {
+            "model": "gpt-3.5-turbo", # You can change this to 'gpt-4' or other models if available
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 100, # Limit response length
+            "temperature": 0.7 # Control creativity
+        }
+        
+        response = requests.post(
+            apiUrl,
+            headers=headers,
+            json=payload
+        )
+        response.raise_for_status() # Raise an exception for HTTP errors (e.g., 4xx or 5xx)
+        
+        result = response.json()
+        
+        # OpenAI response parsing
+        if result and result.get('choices') and len(result['choices']) > 0 and \
+           result['choices'][0].get('message') and result['choices'][0]['message'].get('content'):
+            return result['choices'][0]['message']['content']
+        else:
+            return "LLM could not generate an explanation."
+    except KeyError:
+        st.error("OpenAI API Key not found in Streamlit secrets. Please ensure 'openai.api_key' is set in your secrets.toml or Streamlit Cloud secrets.")
+        return "Failed to get explanation from LLM (API Key missing or incorrectly configured)."
+    except requests.exceptions.RequestException as e:
+        st.error(f"Error calling LLM for explanation: {e}")
+        return "Failed to get explanation from LLM."
+    except json.JSONDecodeError:
+        st.error("Failed to decode JSON response from LLM API.")
+        return "Failed to get explanation from LLM (JSON decode error)."
+    except Exception as e:
+        st.error(f"An unexpected error occurred while calling LLM: {e}")
+        return "Failed to get explanation from LLM."
 
-    def preprocess(self, df):
-        df_processed = df.copy()
 
-        # Handle missing values (simple imputation for demo)
-        for col in self.mean_features:
-            if col in df_processed.columns:
-                df_processed[col] = df_processed[col].fillna(self.mean_features[col])
+# --- Streamlit App Layout ---
+st.set_page_config(page_title="Credit Scoring Dashboard", layout="wide")
 
-        # One-hot encode categorical features
-        for col in self.categorical_cols:
-            if col in df_processed.columns:
-                for category in self.categories[col]:
-                    df_processed[f"{col}_{category}"] = (df_processed[col] == category).astype(int)
-                df_processed = df_processed.drop(columns=[col])
+st.title("Credit Scoring Dashboard")
 
-        # Scale numerical features
-        for col in self.mean_features:
-            if col in df_processed.columns:
-                df_processed[col] = (df_processed[col] - self.mean_features[col]) / self.std_features[col]
+# --- Sidebar for Data Management and Analysis ---
+st.sidebar.header("Data Management")
 
-        return df_processed
 
-class NeuralNetworkModel:
-    def __init__(self):
-        # Simulate weights and biases for a simple 2-layer NN
-        self.input_dim = 25 # Example: based on preprocessed features
-        self.hidden_dim = 10
-        self.output_dim = 1 # Binary classification (default/no default)
-
-        # Randomly initialized weights and biases (for simulation)
-        self.W1 = np.random.rand(self.input_dim, self.hidden_dim) * 0.1
-        self.b1 = np.random.rand(self.hidden_dim) * 0.1
-        self.W2 = np.random.rand(self.hidden_dim, self.output_dim) * 0.1
-        self.b2 = np.random.rand(self.output_dim) * 0.1
-
-    def sigmoid(self, x):
-        return 1 / (1 + np.exp(-np.clip(x, -500, 500))) # Clip to prevent overflow
-
-    def predict_proba(self, X):
-        # Simple forward pass
-        hidden_layer_input = np.dot(X, self.W1) + self.b1
-        hidden_layer_output = np.maximum(0, hidden_layer_input) # ReLU activation
-
-        output_layer_input = np.dot(hidden_layer_output, self.W2) + self.b2
-        probabilities = self.sigmoid(output_layer_input)
-        return probabilities
-
-# Initialize preprocessor and model
-preprocessor = Preprocessor()
-ml_model = NeuralNetworkModel()
-
-st.write("Simulated ML model (Neural Network) and preprocessor initialized for new data.")
-
-# --- Data Management Section ---
-st.header("Data Management")
-
-st.write("AWS S3 client initialized!")
+st.sidebar.success("AWS S3 client initialized!")
 
 # Mock AWS Secrets
-aws_access_key_id = "****************7UIT"
-aws_secret_access_key = "************************************6THc"
+aws_access_key = "****************7UIT"
+aws_secret_key = "************************************6THc"
 s3_bucket_name = "my-langchain-demo-bucket"
-aws_region = "ap-southeast-2"
+aws_region_name = "ap-southeast-2"
 
-st.subheader("AWS Secrets Status:")
-st.write(f"AWS Access Key ID: {aws_access_key_id}")
-st.write(f"AWS Secret Access Key: {aws_secret_access_key}")
-st.write(f"S3 Bucket Name: {s3_bucket_name}")
-st.write(f"AWS Region: {aws_region}")
+st.sidebar.markdown("---")
+st.sidebar.subheader("AWS Secrets Status:")
+st.sidebar.write(f"AWS Access Key ID: `{'*' * (len(aws_access_key) - 4)}{aws_access_key[-4:]}`")
+st.sidebar.write(f"AWS Secret Access Key: `{'*' * (len(aws_secret_key) - 4)}{aws_secret_key[-4:]}`")
+st.sidebar.write(f"S3 Bucket Name: `{s3_bucket_name}`")
+st.sidebar.write(f"AWS Region: `{aws_region_name}`")
 
-st.subheader("Upload Credit Data to S3")
-uploaded_file = st.file_uploader("Choose a CSV file (.csv)", type="csv", help="Drag and drop file hereLimit 200MB per file • CSV")
+
+def clear_file_uploader():
+    st.session_state['file_uploader_key'] += 1
+
+st.sidebar.subheader("Upload Credit Data to S3")
+uploaded_file = st.sidebar.file_uploader(
+    "Choose a CSV file (.csv)",
+    type=["csv"],
+    key=f"file_uploader_{st.session_state['file_uploader_key']}"
+)
 
 if uploaded_file is not None:
-    # Generate a unique filename for S3
+    file_name = uploaded_file.name
     timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-    s3_key = f"uploads/{timestamp}_{uploaded_file.name}"
+    s3_file_key = f"uploads/{timestamp}_{file_name}"
 
     try:
-        # Simulate file upload to S3
-        s3_client.upload_fileobj(uploaded_file, s3_bucket_name, s3_key)
-        st.session_state['last_uploaded_s3_key'] = s3_key # Store for later analysis
+        with st.spinner(f"Uploading {file_name} to S3..."):
+            s3_client.upload_fileobj(uploaded_file, s3_bucket_name, s3_file_key)
+        st.session_state['last_uploaded_s3_key'] = s3_file_key
+        # Clear previous analysis data to force re-analysis
+        st.session_state['scored_data'] = pd.DataFrame()
+        st.sidebar.info("File uploaded. Please select it from the dropdown below and click 'Analyze'.")
+        time.sleep(1) # Give user a moment to read success message
+        clear_file_uploader() # Reset uploader widget
+        st.rerun() # Rerun to update the selectbox options
+
     except Exception as e:
-        st.error(f"Error uploading file to S3: {e}")
+        st.sidebar.error(f"Error uploading file to S3: {e}")
 
-# --- Analyze Credit Data from S3 ---
-st.header("Analyze Credit Data from S3")
+st.sidebar.subheader("Analyze Credit Data from S3")
 
-# List files in the S3 bucket (mocked)
-s3_files_response = s3_client.list_objects_v2(Bucket=s3_bucket_name, Prefix='uploads/')
-s3_files = [obj['Key'] for obj in s3_files_response.get('Contents', [])]
+s3_files = []
+try:
+    if s3_client:
+        response = s3_client.list_objects_v2(Bucket=s3_bucket_name, Prefix="uploads/")
+        if 'Contents' in response:
+            s3_files = [obj['Key'] for obj in response['Contents'] if obj['Key'].endswith('.csv')]
+            s3_files.sort(reverse=True) # Show most recent first
+except Exception as e:
+    st.sidebar.warning(f"Could not list files from S3 bucket: {e}. Ensure 'uploads/' prefix exists or bucket is not empty, and permissions are correct.")
+    s3_files = []
 
-if not s3_files:
-    st.info("No CSV files found in S3 bucket. Please upload a file first.")
-else:
-    selected_file = st.selectbox("Select File for Analysis", s3_files, index=0 if 'last_uploaded_s3_key' not in st.session_state else s3_files.index(st.session_state['last_uploaded_s3_key']) if st.session_state['last_uploaded_s3_key'] in s3_files else 0)
+# --- Analysis Trigger Form ---
+with st.sidebar.form("analysis_trigger_form"):
+    st.markdown("### Select File for Analysis")
 
-    # Mock data for demonstration if no file is selected or uploaded
-    if selected_file:
+    selected_s3_file_in_form = None
+    if s3_files:
+        default_index = 0
+        if st.session_state['last_uploaded_s3_key'] and st.session_state['last_uploaded_s3_key'] in s3_files:
+            try:
+                default_index = s3_files.index(st.session_state['last_uploaded_s3_key'])
+            except ValueError: # Fallback if key is not found (e.g., deleted)
+                default_index = 0
+
+        selected_s3_file_in_form = st.selectbox(
+            "Choose a CSV file from S3:",
+            options=s3_files,
+            index=default_index,
+            key="s3_file_selector_form" # Unique key for the selectbox
+        )
+    else:
+        st.info("No CSV files found in the 'uploads/' folder of your S3 bucket. Please upload one above.")
+
+    if selected_s3_file_in_form:
         try:
-            # Simulate downloading file from S3
-            obj = s3_client.get_object(Bucket=s3_bucket_name, Key=selected_file)
-            df = pd.read_csv(io.BytesIO(obj['Body'].read()))
-            st.success(f"File '{selected_file}' loaded successfully.")
+            # Temporarily read the file to get column names for target selector
+            temp_obj = s3_client.get_object(Bucket=s3_bucket_name, Key=selected_s3_file_in_form)
+            temp_df = pd.read_csv(io.BytesIO(temp_obj['Body'].read()))
+            st.session_state['uploaded_df_columns'] = temp_df.columns.tolist()
 
-            target_column = st.selectbox(
+            default_target_idx = 0
+            # Prioritize 'TARGET' as it was the original default for credit.csv
+            if 'TARGET' in st.session_state['uploaded_df_columns']:
+                default_target_idx = st.session_state['uploaded_df_columns'].index('TARGET')
+            elif 'default' in st.session_state['uploaded_df_columns']: # Also check for 'default'
+                default_target_idx = st.session_state['uploaded_df_columns'].index('default')
+            elif len(st.session_state['uploaded_df_columns']) > 0:
+                st.sidebar.warning(f"Default target column 'TARGET' or 'default' not found. Please select the correct target column.")
+                default_target_idx = 0 # Default to first column if common targets not found
+
+            st.session_state['selected_target_column'] = st.selectbox(
                 "Select the Target Column (e.g., 'default', 'TARGET'):",
-                options=df.columns.tolist(),
-                index=df.columns.get_loc('default') if 'default' in df.columns else 0
+                options=st.session_state['uploaded_df_columns'],
+                index=default_target_idx,
+                key="target_column_selector"
             )
-
-            if st.button("Analyze"):
-                st.write("Analyzing data...")
-
-                # --- Simulate Credit Scoring ---
-                def get_credit_score_ml(data_df):
-                    # Simulate preprocessing
-                    processed_data = preprocessor.preprocess(data_df)
-
-                    # Ensure all expected features are present, fill with 0 if not
-                    # This is a simplification; in a real model, you'd align columns
-                    expected_features = ['Age', 'Income', 'LoanAmount', 'CreditScore', 'EmploymentYears',
-                                         'DebtToIncome', 'NumCreditLines', 'NumLatePayments', 'InterestRate',
-                                         'LoanTerm', 'TLSCatPct', 'Education_High School', 'Education_Bachelors',
-                                         'Education_Masters', 'Education_PhD', 'MaritalStatus_Single',
-                                         'MaritalStatus_Married', 'MaritalStatus_Divorced', 'HasMortgage_0',
-                                         'HasMortgage_1', 'HasDependents_0', 'HasDependents_1', 'LoanPurpose_Auto',
-                                         'LoanPurpose_Home', 'LoanPurpose_Education', 'LoanPurpose_Debt Consolidation',
-                                         'LoanPurpose_Other']
-
-                    # Ensure processed_data has all expected columns, filling missing with 0
-                    for feature in expected_features:
-                        if feature not in processed_data.columns:
-                            processed_data[feature] = 0
-                    processed_data = processed_data[expected_features] # Reorder to match model's expected input
-
-                    # Simulate prediction
-                    probabilities = ml_model.predict_proba(processed_data.values)
-                    predictions = (probabilities > 0.5).astype(int).flatten() # Binary prediction
-
-                    # Simulate risk categories
-                    risk_scores = np.random.uniform(0.1, 0.9, len(data_df)) # Random risk score
-                    risk_categories = np.where(predictions == 1, 'High Risk', 'Low Risk')
-
-                    return pd.DataFrame({
-                        'prediction': predictions,
-                        'risk_score': risk_scores,
-                        'risk_category': risk_categories
-                    })
-
-                # Perform analysis
-                if target_column in df.columns:
-                    features_df = df.drop(columns=[target_column])
-                else:
-                    features_df = df.copy() # If target column not found, use all columns
-
-                scored_data = get_credit_score_ml(features_df)
-                st.session_state['scored_data'] = scored_data
-                st.session_state['original_data'] = df # Store original data for dashboard
-
-                st.write("Analysis complete. Results:")
-                st.dataframe(scored_data.head())
-
-                # --- Explainable AI (XAI) with LLM (Simulated) ---
-                st.subheader("Explainable AI (XAI) for High-Risk Applicants")
-                high_risk_applicants = st.session_state['original_data'][st.session_state['scored_data']['risk_category'] == 'High Risk']
-
-                if not high_risk_applicants.empty:
-                    st.write("Generating explanations for high-risk applicants...")
-                    explanations = []
-                    for index, row in high_risk_applicants.head(5).iterrows(): # Explain top 5 for demo
-                        # Simulate LLM call for explanation
-                        # In a real scenario, you'd send relevant features to an LLM
-                        # and get a human-readable explanation.
-                        simulated_explanation = (
-                            f"Applicant {index+1} was flagged as high-risk due to factors such as "
-                            f"a relatively low Credit Score ({row['CreditScore']}), "
-                            f"a high Debt-to-Income ratio ({row['DebtToIncome']:.2f}), "
-                            f"and a higher number of late payments ({row['NumLatePayments']}). "
-                            f"Their Loan Amount of ${row['LoanAmount']:,} also contributed to the risk assessment."
-                        )
-                        explanations.append(f"**Applicant {index+1}:** {simulated_explanation}")
-                    for exp in explanations:
-                        st.markdown(exp)
-                else:
-                    st.info("No high-risk applicants identified in the analyzed data.")
-
         except Exception as e:
-            st.error(f"Error loading or processing file from S3: {e}")
+            st.sidebar.error(f"Error reading selected file to get columns for target selector: {e}")
+            st.session_state['uploaded_df_columns'] = [] # Clear columns on error
+            st.session_state['selected_target_column'] = '' # Clear selected target on error
     else:
-        st.info("Please select a file to analyze.")
+        st.session_state['uploaded_df_columns'] = []
+        st.session_state['selected_target_column'] = ''
 
-# --- Credit Scoring Dashboard ---
-st.header("Credit Scoring Dashboard")
 
-if 'scored_data' in st.session_state and not st.session_state['scored_data'].empty:
-    st.write("Displaying Credit Scoring Dashboard:")
+    analyze_submitted = st.form_submit_button(f"Analyze Selected File")
 
-    scored_data = st.session_state['scored_data']
-    original_data = st.session_state['original_data']
+    if analyze_submitted:
+        if selected_s3_file_in_form and st.session_state['selected_target_column']:
+            file_to_analyze = selected_s3_file_in_form
+            actual_target_col_name = st.session_state['selected_target_column']
 
-    # Combine for dashboard display
-    dashboard_df = pd.concat([original_data.reset_index(drop=True), scored_data.reset_index(drop=True)], axis=1)
+            if not actual_target_col_name:
+                st.error("No target column selected. Please select one from the dropdown.")
+            else:
+                try:
+                    with st.spinner(f"Downloading and analyzing '{file_to_analyze}' from S3..."):
+                        obj = s3_client.get_object(Bucket=s3_bucket_name, Key=file_to_analyze)
+                        df = pd.read_csv(io.BytesIO(obj['Body'].read()))
+                        st.write(f"DEBUG: Original columns in loaded CSV: {df.columns.tolist()}")
 
-    st.subheader("Overall Risk Distribution")
-    risk_counts = dashboard_df['risk_category'].value_counts()
-    st.bar_chart(risk_counts)
+                        # --- CRITICAL FIX: Handle duplicate column name from CSV ---
+                        if 'TLDel60Cnt24.1' in df.columns:
+                            st.write("DEBUG: Dropping duplicate column 'TLDel60Cnt24.1' found in uploaded CSV.")
+                            df = df.drop(columns=['TLDel60Cnt24.1'])
 
-    st.subheader("Risk Score Distribution")
-    st.hist_chart(dashboard_df['risk_score'])
 
-    st.subheader("Detailed Scored Data")
-    st.dataframe(dashboard_df)
+                        # Ensure 'ID' column exists for merging later
+                        if 'ID' not in df.columns:
+                            df['ID'] = df.index.astype(str) + '_idx'
+                        else:
+                            df['ID'] = df['ID'].astype(str) # Ensure ID is string type
 
-    # Example: Filter by risk category
-    selected_risk_category = st.selectbox("Filter by Risk Category:", ['All', 'High Risk', 'Low Risk'])
-    if selected_risk_category == 'All':
-        filtered_df = dashboard_df
+                        # Convert target column to numeric and handle NaNs
+                        if actual_target_col_name in df.columns:
+                            df[actual_target_col_name] = pd.to_numeric(df[actual_target_col_name], errors='coerce').fillna(0).astype(int)
+                        else:
+                            st.error(f"The selected target column '{actual_target_col_name}' was not found in the uploaded data. Please check your CSV and select the correct column.")
+                            st.session_state['scored_data'] = pd.DataFrame() # Clear on error
+                            st.rerun() # Rerun to clear state and show error
+                            
+                        st.write(f"DEBUG: DataFrame columns before passing to ML scoring: {df.columns.tolist()}")
+                        results_df = get_credit_score_ml(df.copy(), st.session_state['approval_threshold'], actual_target_col_name)
+                        st.write(f"DEBUG: Results DataFrame from ML scoring: {results_df.head()}")
+
+                        # Reorder columns to have ID first, then original columns, then Score and Decision
+                        if 'ID' in df.columns:
+                            cols = ['ID'] + [col for col in df.columns if col != 'ID']
+                            df = df[cols]
+
+                        df_scored = pd.concat([df, results_df], axis=1)
+                        st.session_state['scored_data'] = df_scored
+                        st.success(f"Analysis complete for '{file_to_analyze}'.")
+                        st.write(f"DEBUG: Final scored_data shape after analysis: {st.session_state['scored_data'].shape}")
+                        st.rerun() # Force a rerun to display the dashboard with new data
+
+                except Exception as e:
+                    st.error(f"Error analyzing file from S3: {e}. Please check file format and column names in your CSV file.")
+                    st.write(f"Detailed error: {e}") # Provide more detailed error to user
+                    st.session_state['scored_data'] = pd.DataFrame() # Clear on error
+                    st.rerun() # Rerun to clear state and show error
+        else:
+            st.sidebar.warning("Please select a file and a target column to analyze.")
+
+# --- Clear Displayed Data Button (in sidebar) ---
+# This button should only appear if there is data to clear
+if not st.session_state['scored_data'].empty:
+    if st.sidebar.button("Clear Displayed Data", key="clear_data_button_sidebar"):
+        st.session_state['scored_data'] = pd.DataFrame()
+        st.session_state['selected_file_for_analysis'] = None
+        st.sidebar.success("Displayed data cleared.")
+        st.rerun()
+
+
+# --- Display Dashboard Results if scored_data is available ---
+if not st.session_state['scored_data'].empty:
+    df_display = st.session_state['scored_data']
+    st.write("DEBUG: Displaying dashboard because scored_data is not empty.")
+
+    st.header("Credit Scoring Dashboard")
+
+    # Display overall metrics
+    col1, col2, col3 = st.columns(3)
+
+    total_applicants = len(df_display)
+    approved_applicants = df_display[df_display['Decision'] == 'Approved'].shape[0]
+    rejected_applicants = df_display[df_display['Decision'] == 'Rejected'].shape[0]
+    approval_rate = (approved_applicants / total_applicants * 100) if total_applicants > 0 else 0
+
+    with col1:
+        st.metric("Total Applicants", total_applicants)
+    with col2:
+        st.metric("Approved Applicants", approved_applicants)
+    with col3:
+        st.metric("Approval Rate", f"{approval_rate:.2f}%")
+
+    st.markdown("---")
+
+    # Score Distribution Histogram
+    st.subheader("Credit Score Distribution")
+    fig_hist = px.histogram(df_display, x="Score", nbins=20,
+                            title="Distribution of Credit Scores",
+                            labels={"Score": "Credit Score"},
+                            color_discrete_sequence=['skyblue'])
+    st.plotly_chart(fig_hist, use_container_width=True)
+
+    st.markdown("---")
+
+    # Decision Breakdown Pie Chart
+    st.subheader("Loan Decision Breakdown")
+    decision_counts = df_display['Decision'].value_counts().reset_index()
+    decision_counts.columns = ['Decision', 'Count']
+    fig_pie = px.pie(decision_counts, values='Count', names='Decision',
+                     title='Proportion of Approved vs. Rejected Loans',
+                     color_discrete_sequence=['lightgreen', 'salmon'])
+    st.plotly_chart(fig_pie, use_container_width=True)
+
+    st.markdown("---")
+
+    # Average feature values by decision - Group 1
+    st.subheader("Average Statistics by Loan Decision (Group 1: Counts & Indicators)")
+    features_group1 = [col for col in GROUP_1_COUNTS_INDICATORS if col in df_display.columns]
+    if features_group1:
+        # Ensure numerical columns are truly numeric before aggregation
+        for col in features_group1:
+            df_display[col] = pd.to_numeric(df_display[col], errors='coerce').fillna(0)
+        
+        avg_features_by_decision_group1 = df_display.groupby('Decision')[features_group1].mean().T
+        st.dataframe(avg_features_by_decision_group1)
     else:
-        filtered_df = dashboard_df[dashboard_df['risk_category'] == selected_risk_category]
-    st.dataframe(filtered_df)
+        st.info("No features in Group 1 available for showing average values by decision.")
+
+    st.markdown("---")
+
+    # Average feature values by decision - Group 2
+    st.subheader("Average Statistics by Loan Decision (Group 2: Time & Percentages)")
+    features_group2 = [col for col in GROUP_2_TIME_PERCENTAGES if col in df_display.columns]
+    if features_group2:
+        # Ensure numerical columns are truly numeric before aggregation
+        for col in features_group2:
+            df_display[col] = pd.to_numeric(df_display[col], errors='coerce').fillna(0)
+
+        avg_features_by_decision_group2 = df_display.groupby('Decision')[features_group2].mean().T
+        st.dataframe(avg_features_by_decision_group2)
+    else:
+        st.info("No features in Group 2 available for showing average values by decision.")
+
+    st.markdown("---")
+
+    # Average feature values by decision - Group 3
+    st.subheader("Average Statistics by Loan Decision (Group 3: Sums & Max Sums)")
+    features_group3 = [col for col in GROUP_3_SUMS_MAXSUMS if col in df_display.columns]
+    if features_group3:
+        # Ensure numerical columns are truly numeric before aggregation
+        for col in features_group3:
+            df_display[col] = pd.to_numeric(df_display[col], errors='coerce').fillna(0)
+
+        avg_features_by_decision_group3 = df_display.groupby('Decision')[features_group3].mean().T
+        st.dataframe(avg_features_by_decision_group3)
+    else:
+        st.info("No features in Group 3 available for showing average values by decision.")
+
+    st.markdown("---")
+
+    # Display the scored data table
+    st.subheader("Scored Credit Data")
+    st.dataframe(df_display)
+
+    st.markdown("---")
+    st.header("AI-Powered Explanations for Rejected Loans")
+    st.info("Click on a rejected loan's ID to get an AI-generated explanation for the decision.")
+
+    vulnerable_loans = df_display[df_display['Decision'] == 'Rejected'].sort_values(by='Score', ascending=True)
+
+    if not vulnerable_loans.empty:
+        for index, row in vulnerable_loans.iterrows():
+            loan_id = row['ID']
+            score = row['Score']
+            decision = row['Decision']
+            
+            # Prepare features for LLM explanation
+            loan_features = {}
+            # Iterate over all defined features to ensure consistency
+            all_relevant_features = NUMERICAL_FEATURES + CATEGORICAL_FEATURES
+            for feature_name in all_relevant_features:
+                if feature_name in row: # Check if the feature exists in the current row
+                    value = row[feature_name]
+                    if feature_name in NUMERICAL_FEATURES:
+                        # Ensure numerical values are correctly handled, including NaNs
+                        loan_features[feature_name] = pd.to_numeric(value, errors='coerce').fillna(0)
+                    else:
+                        # Ensure categorical values are strings and handle potential NaNs
+                        loan_features[feature_name] = str(value).replace('nan', 'missing_category')
+            # Remove any features that might still be NaN or None after processing, if desired
+            loan_features = {k: v for k, v in loan_features.items() if pd.notna(v) and v is not None}
+
+            with st.expander(f"Explain why Loan ID: **{loan_id}** (Score: {score:.2f}, Decision: {decision}) was rejected"):
+                with st.spinner(f"Generating explanation for {loan_id}..."):
+                    explanation = get_llm_explanation(loan_features, score, decision)
+                    st.markdown(explanation)
+    else:
+        st.info("No rejected loans to generate explanations for at the current threshold.")
 
 else:
-    st.write("Upload a CSV file and click 'Analyze' to view the dashboard.")
+    st.info("Upload a CSV file and click 'Analyze' to view the dashboard.")
     st.write("DEBUG: scored_data is empty, so dashboard is not displayed.")
 
 
-st.header("How this app would integrate with AWS and LLM (Recap):")
-st.markdown("""
-This Streamlit app demonstrates uploading and analyzing sophisticated credit data from AWS S3, leveraging a powerful Neural Network machine learning model.
+st.markdown("---")
+st.subheader("How this app would integrate with AWS and LLM (Recap):")
 
-☁️ **AWS Cloud Integration:**
-* **Data Storage (S3):** Data files are stored in AWS S3, providing durable and scalable storage.
-* **Machine Learning Model Hosting (SageMaker):** In a real scenario, the `get_credit_score_ml` function would call a sophisticated ML model deployed on AWS SageMaker for more accurate and robust predictions. This separates the heavy computation from the Streamlit app.
-* **Serverless Functions (Lambda):** Could be used for automated processing of new files uploaded to S3 (e.g., triggering the scoring process automatically).
-* **Authentication & Authorization (Cognito):** For secure user access to the app and S3, ensuring only authorized users can upload or view sensitive data.
-* **Logging & Monitoring (CloudWatch):** To track app performance, S3 interactions, and potential errors, providing insights for operational management.
+st.markdown(
+    """
+    This Streamlit app demonstrates uploading and analyzing **sophisticated credit data** from AWS S3, leveraging a powerful Neural Network machine learning model.
 
-🧠 **Large Language Model (LLM) Integration:**
+    ### ☁️ AWS Cloud Integration:
+    * **Data Storage (S3):** Data files are stored in AWS S3, providing durable and scalable storage.
+    * **Machine Learning Model Hosting (SageMaker):** In a real scenario, the `get_credit_score_ml` function would call a sophisticated ML model deployed on AWS SageMaker for more accurate and robust predictions. This separates the heavy computation from the Streamlit app.
+    * **Serverless Functions (Lambda):** Could be used for automated processing of new files uploaded to S3 (e.g., triggering the scoring process automatically).
+    * **Authentication & Authorization (Cognito):** For secure user access to the app and S3, ensuring only authorized users can upload or view sensitive data.
+    * **Logging & Monitoring (CloudWatch):** To track app performance, S3 interactions, and potential errors, providing insights for operational management.
 
-The LLM (currently OpenAI's GPT-3.5-turbo) is used to provide Explainable AI (XAI). After identifying rejected applicants, the LLM generates concise, human-readable explanations for why specific applicants were flagged as high-risk, based on their input features. This helps in understanding and communicating complex model decisions.
-""")
+    ### 🧠 Large Language Model (LLM) Integration:
+    The LLM (currently OpenAI's GPT-3.5-turbo) is used to provide **Explainable AI (XAI)**. After identifying rejected applicants, the LLM generates concise, human-readable explanations for *why* specific applicants were flagged as high-risk, based on their input features. This helps in understanding and communicating complex model decisions.
+    """
+)
