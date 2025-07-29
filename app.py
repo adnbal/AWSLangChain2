@@ -7,7 +7,11 @@ import plotly.express as px
 
 # --- Session State ---
 st.session_state.setdefault('scored_data', pd.DataFrame())
-st.session_state.setdefault('approval_threshold', 50)  # Default threshold
+
+# --- Sidebar Threshold Slider ---
+st.sidebar.header("Settings")
+approval_threshold = st.sidebar.slider("Set Approval Threshold", 0, 100, 50, 1)
+st.session_state['approval_threshold'] = approval_threshold
 
 # --- Define Features ---
 NUMERICAL_FEATURES = [
@@ -19,7 +23,7 @@ NUMERICAL_FEATURES = [
 ]
 
 # --- Simulated Realistic Scoring ---
-def get_credit_score_realistic(df_input, approval_threshold):
+def get_credit_score_realistic(df_input):
     df = df_input.copy()
 
     # Fill missing required columns with zeros
@@ -28,13 +32,11 @@ def get_credit_score_realistic(df_input, approval_threshold):
         df[col] = 0
 
     # Simulate realistic credit scores (mean ~75, std dev 10)
-    np.random.seed(42)  # Reproducibility
+    np.random.seed(42)
     scores = np.random.normal(75, 10, len(df))  # Mean 75, std dev 10
-    scores = np.clip(scores, 0, 100)  # Keep between 0 and 100
+    scores = np.clip(scores, 0, 100)
 
-    # Apply threshold for approval/rejection
-    decisions = np.where(scores >= approval_threshold, "Approved", "Rejected")
-    return pd.DataFrame({'Score': scores, 'Decision': decisions})
+    return scores
 
 # --- LLM Explanation (Optional) ---
 def get_llm_explanation(features_dict, score, decision):
@@ -60,7 +62,7 @@ def get_llm_explanation(features_dict, score, decision):
 
 # --- Streamlit Layout ---
 st.set_page_config(page_title="Credit Scoring Dashboard", layout="wide")
-st.title("Credit Scoring Dashboard (Realistic Scores)")
+st.title("Credit Scoring Dashboard with Adjustable Threshold")
 
 # --- File Upload ---
 uploaded_file = st.file_uploader("Upload Credit Data (CSV or Excel)", type=["csv", "xlsx"])
@@ -76,7 +78,10 @@ if uploaded_file is not None:
         df['ID'] = df.index.astype(str)
 
     # Generate realistic scores
-    scored_df = get_credit_score_realistic(df, st.session_state['approval_threshold'])
+    scores = get_credit_score_realistic(df)
+    decisions = np.where(scores >= approval_threshold, "Approved", "Rejected")
+
+    scored_df = pd.DataFrame({'Score': scores, 'Decision': decisions})
     final_df = pd.concat([df, scored_df], axis=1)
     st.session_state['scored_data'] = final_df
 
@@ -85,13 +90,8 @@ if not st.session_state['scored_data'].empty:
     df_display = st.session_state['scored_data']
     df_display['Score'] = pd.to_numeric(df_display['Score'], errors='coerce').fillna(0)
 
-    # Debug Info
-    st.write("DEBUG: Score Summary", df_display['Score'].describe())
-
     # Metrics
     st.subheader("Dashboard")
-    st.dataframe(df_display.head())
-
     col1, col2, col3 = st.columns(3)
     total = len(df_display)
     approved = (df_display['Decision'] == 'Approved').sum()
