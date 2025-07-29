@@ -51,6 +51,22 @@ NUMERICAL_FEATURES_FOR_PLOTTING = [
     'TLDel90Cnt24', 'TLDel60CntAll', 'TLOpenPct', 'TLBadDerogCnt', 'TLOpen24Pct'
 ]
 
+# Group numerical features for better visualization scaling
+GROUP_1_COUNTS_INDICATORS = [
+    'DerogCnt', 'CollectCnt', 'BanruptcyInd', 'InqCnt06', 'InqFinanceCnt24',
+    'TLCnt03', 'TLCnt12', 'TLCnt24', 'TLCnt', 'TLSatCnt', 'TLDel60Cnt',
+    'TLBadCnt24', 'TL75UtilCnt', 'TL50UtilCnt', 'TLDel3060Cnt24',
+    'TLDel90Cnt24', 'TLDel60CntAll', 'TLBadDerogCnt'
+]
+
+GROUP_2_TIME_PERCENTAGES = [
+    'InqTimeLast', 'TLTimeLast', 'TLBalHCPct', 'TLSatPct', 'TLOpenPct', 'TLOpen24Pct'
+]
+
+GROUP_3_SUMS_MAXSUMS = [
+    'TLSum', 'TLMaxSum'
+]
+
 
 # Target column name is 'default' (lowercase)
 TARGET_COLUMN = 'default' 
@@ -238,8 +254,8 @@ def get_llm_explanation(features_dict: dict, score: float, decision: str):
     """
     
     try:
-        # Get OpenAI API key from Streamlit secrets
-        openai_api_key = st.secrets["openai_api_key"]
+        # Get OpenAI API key from Streamlit secrets, accessing the nested structure
+        openai_api_key = st.secrets["openai"]["api_key"]
         
         # OpenAI API endpoint for chat completions
         apiUrl = "https://api.openai.com/v1/chat/completions"
@@ -272,8 +288,8 @@ def get_llm_explanation(features_dict: dict, score: float, decision: str):
         else:
             return "LLM could not generate an explanation."
     except KeyError:
-        st.error("OpenAI API Key not found in Streamlit secrets. Please ensure 'openai_api_key' is set.")
-        return "Failed to get explanation from LLM (API Key missing)."
+        st.error("OpenAI API Key not found in Streamlit secrets. Please ensure 'openai.api_key' is set in your secrets.toml or Streamlit Cloud secrets.")
+        return "Failed to get explanation from LLM (API Key missing or incorrectly configured)."
     except requests.exceptions.RequestException as e:
         st.error(f"Error calling LLM for explanation: {e}")
         return "Failed to get explanation from LLM."
@@ -726,47 +742,79 @@ if 'scored_data' in st.session_state and not st.session_state['scored_data'].emp
 
     st.subheader("Average Statistics for Approved vs. Rejected Loans")
 
-    # Select numerical features for mean calculation (using the list *without* TLTimeFirst for plotting)
-    features_for_stats = [col for col in NUMERICAL_FEATURES_FOR_PLOTTING if col in df_display.columns]
+    # Ensure selected columns are numeric before calculating mean
+    # Filter df_display to only include relevant numerical features for stats
+    df_numeric_for_stats = df_display[NUMERICAL_FEATURES_FOR_PLOTTING].apply(pd.to_numeric, errors='coerce').fillna(0)
+    
+    approved_stats = df_numeric_for_stats[df_display['Decision'] == 'Approved'].mean().rename('Approved Avg')
+    rejected_stats = df_numeric_for_stats[df_display['Decision'] == 'Rejected'].mean().rename('Rejected Avg')
 
-    if not features_for_stats:
-        st.info("No numerical features available for calculating average statistics.")
-    else:
-        # Ensure selected columns are numeric before calculating mean
-        df_numeric_for_stats = df_display[features_for_stats].apply(pd.to_numeric, errors='coerce').fillna(0) # Fill NaN with 0 for mean calculation
-        
-        approved_stats = df_numeric_for_stats[df_display['Decision'] == 'Approved'].mean().rename('Approved Avg')
-        rejected_stats = df_numeric_for_stats[df_display['Decision'] == 'Rejected'].mean().rename('Rejected Avg')
+    # Combine into a single DataFrame for display
+    summary_stats_df = pd.DataFrame([approved_stats, rejected_stats]).T
+    summary_stats_df.index.name = 'Feature'
+    st.dataframe(summary_stats_df.style.format("{:.2f}"))
 
-        # Combine into a single DataFrame for display
-        summary_stats_df = pd.DataFrame([approved_stats, rejected_stats]).T
-        summary_stats_df.index.name = 'Feature'
-        st.dataframe(summary_stats_df.style.format("{:.2f}"))
+    st.info("Compare the average values of key features between approved and rejected loans to understand influencing factors.")
 
-        st.info("Compare the average values of key features between approved and rejected loans to understand influencing factors.")
+    # --- New: Bar charts for Average Statistics (Split into 3) ---
+    st.subheader("Visualizing Average Statistics by Feature Group")
 
-        # --- New: Bar chart for Average Statistics ---
-        st.subheader("Visualizing Average Statistics")
-        # Convert the summary_stats_df from wide to long format for Plotly Express
-        summary_stats_long_df = summary_stats_df.reset_index().melt(
-            id_vars='Feature',
-            var_name='Decision Type',
-            value_name='Average Value'
+    # Group 1: Counts & Indicators
+    features_group1 = [col for col in GROUP_1_COUNTS_INDICATORS if col in df_numeric_for_stats.columns]
+    if features_group1:
+        summary_stats_group1 = summary_stats_df.loc[features_group1].reset_index().melt(
+            id_vars='Feature', var_name='Decision Type', value_name='Average Value'
         )
-
-        fig_avg_stats = px.bar(
-            summary_stats_long_df,
-            x='Feature',
-            y='Average Value',
-            color='Decision Type',
-            barmode='group', # Group bars for each feature
-            title='Average Feature Values by Loan Decision (Excluding TLTimeFirst)', # Updated title
+        fig_group1 = px.bar(
+            summary_stats_group1,
+            x='Feature', y='Average Value', color='Decision Type', barmode='group',
+            title='Group 1: Average Counts & Indicators by Loan Decision',
             labels={'Feature': 'Credit Feature', 'Average Value': 'Average Value'},
             color_discrete_map={'Approved Avg': '#4CAF50', 'Rejected Avg': '#f44336'},
-            text_auto='.2s' # Automatically show values on bars, formatted to 2 significant figures
+            text_auto='.2s'
         )
-        fig_avg_stats.update_layout(xaxis_tickangle=-45)
-        st.plotly_chart(fig_avg_stats, use_container_width=True)
+        fig_group1.update_layout(xaxis_tickangle=-45)
+        st.plotly_chart(fig_group1, use_container_width=True)
+    else:
+        st.info("No features in Group 1 available for plotting.")
+
+    # Group 2: Time & Percentages
+    features_group2 = [col for col in GROUP_2_TIME_PERCENTAGES if col in df_numeric_for_stats.columns]
+    if features_group2:
+        summary_stats_group2 = summary_stats_df.loc[features_group2].reset_index().melt(
+            id_vars='Feature', var_name='Decision Type', value_name='Average Value'
+        )
+        fig_group2 = px.bar(
+            summary_stats_group2,
+            x='Feature', y='Average Value', color='Decision Type', barmode='group',
+            title='Group 2: Average Time & Percentages by Loan Decision',
+            labels={'Feature': 'Credit Feature', 'Average Value': 'Average Value'},
+            color_discrete_map={'Approved Avg': '#4CAF50', 'Rejected Avg': '#f44336'},
+            text_auto='.2s'
+        )
+        fig_group2.update_layout(xaxis_tickangle=-45)
+        st.plotly_chart(fig_group2, use_container_width=True)
+    else:
+        st.info("No features in Group 2 available for plotting.")
+
+    # Group 3: Sums & Max Sums
+    features_group3 = [col for col in GROUP_3_SUMS_MAXSUMS if col in df_numeric_for_stats.columns]
+    if features_group3:
+        summary_stats_group3 = summary_stats_df.loc[features_group3].reset_index().melt(
+            id_vars='Feature', var_name='Decision Type', value_name='Average Value'
+        )
+        fig_group3 = px.bar(
+            summary_stats_group3,
+            x='Feature', y='Average Value', color='Decision Type', barmode='group',
+            title='Group 3: Average Sums & Max Sums by Loan Decision',
+            labels={'Feature': 'Credit Feature', 'Average Value': 'Average Value'},
+            color_discrete_map={'Approved Avg': '#4CAF50', 'Rejected Avg': '#f44336'},
+            text_auto='.2s'
+        )
+        fig_group3.update_layout(xaxis_tickangle=-45)
+        st.plotly_chart(fig_group3, use_container_width=True)
+    else:
+        st.info("No features in Group 3 available for plotting.")
 
 
     # --- New: LLM Suggestions for Rejected Loans ---
