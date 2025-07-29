@@ -726,6 +726,17 @@ if st.session_state['analyze_triggered'] and st.session_state['selected_file_for
 if 'scored_data' in st.session_state and not st.session_state['scored_data'].empty:
     df_display = st.session_state['scored_data']
 
+    # --- Ensure numerical columns are truly numeric before aggregation and plotting ---
+    # This is the key fix for the ValueError
+    numerical_cols_for_display = ['TLSum', 'Score', 'TLCnt', 'TLBadCnt24'] + \
+                                 GROUP_1_COUNTS_INDICATORS + GROUP_2_TIME_PERCENTAGES + GROUP_3_SUMS_MAXSUMS + \
+                                 ['DerogCnt'] # Add DerogCnt for the pie chart binning
+
+    for col in numerical_cols_for_display:
+        if col in df_display.columns:
+            df_display[col] = pd.to_numeric(df_display[col], errors='coerce').fillna(0)
+
+
     # --- Top Row Metrics ---
     st.markdown("### Key Credit Metrics")
     col_metrics = st.columns(4)
@@ -741,29 +752,23 @@ if 'scored_data' in st.session_state and not st.session_state['scored_data'].emp
     # Take a sample for sparkline if data is too large
     sparkline_data_sample = dummy_trend_data.sample(min(50, len(dummy_trend_data))).sort_values('Date')
 
-    # Ensure numerical columns are truly numeric before aggregation
-    df_display_numeric = df_display.copy()
-    for col in ['TLSum', 'Score', 'TLCnt', 'TLBadCnt24']:
-        if col in df_display_numeric.columns:
-            df_display_numeric[col] = pd.to_numeric(df_display_numeric[col], errors='coerce').fillna(0)
-
     with col_metrics[0]:
-        current_tlsum = df_display_numeric['TLSum'].sum() if 'TLSum' in df_display_numeric.columns else 0
+        current_tlsum = df_display['TLSum'].sum() if 'TLSum' in df_display.columns else 0
         prev_tlsum = current_tlsum * 0.95 # Dummy previous year
         create_metric_card("Total Loan Sum", current_tlsum, prev_tlsum, unit="", chart_data=sparkline_data_sample, chart_y_col='Value')
 
     with col_metrics[1]:
-        current_score_avg = df_display_numeric['Score'].mean() if 'Score' in df_display_numeric.columns else 0
+        current_score_avg = df_display['Score'].mean() if 'Score' in df_display.columns else 0
         prev_score_avg = current_score_avg * 1.02 # Dummy previous year
         create_metric_card("Avg Credit Score", current_score_avg, prev_score_avg, is_percentage=False, chart_data=sparkline_data_sample, chart_y_col='Value')
 
     with col_metrics[2]:
-        current_tlcnt = df_display_numeric['TLCnt'].sum() if 'TLCnt' in df_display_numeric.columns else 0
+        current_tlcnt = df_display['TLCnt'].sum() if 'TLCnt' in df_display.columns else 0
         prev_tlcnt = current_tlcnt * 0.9 # Dummy previous year
         create_metric_card("Total Trades", current_tlcnt, prev_tlcnt, unit="", chart_data=sparkline_data_sample, chart_y_col='Value')
 
     with col_metrics[3]:
-        current_bad_cnt = df_display_numeric['TLBadCnt24'].sum() if 'TLBadCnt24' in df_display_numeric.columns else 0
+        current_bad_cnt = df_display['TLBadCnt24'].sum() if 'TLBadCnt24' in df_display.columns else 0
         prev_bad_cnt = current_bad_cnt * 1.1 # Dummy previous year (increased bad count)
         create_metric_card("Bad Trades (24M)", current_bad_cnt, prev_bad_cnt, unit="", chart_data=sparkline_data_sample, chart_y_col='Value')
 
@@ -800,6 +805,7 @@ if 'scored_data' in st.session_state and not st.session_state['scored_data'].emp
         st.markdown('<div class="dashboard-card table-card">', unsafe_allow_html=True)
         st.markdown("<h4>Business Overview by Decision</h4>")
         # Aggregate data by Decision for overview
+        # Ensure 'Score', 'TLSum', 'TLBadCnt24' are numeric before aggregation
         overview_df = df_display.groupby('Decision').agg(
             Total_Loans=('ID', 'count'),
             Avg_Score=('Score', 'mean'),
@@ -827,6 +833,7 @@ if 'scored_data' in st.session_state and not st.session_state['scored_data'].emp
         st.markdown('<div class="dashboard-card chart-card">', unsafe_allow_html=True)
         st.markdown("<h4>Decision Contribution by Derogatory Count Group</h4>")
         # Create a categorical feature from DerogCnt for pie chart
+        # DerogCnt is already converted to numeric at the top of this block
         df_display['DerogCnt_Group'] = pd.cut(df_display['DerogCnt'], bins=[-1, 0, 1, 5, df_display['DerogCnt'].max()],
                                               labels=['No Derog', '1 Derog', '2-5 Derogs', '>5 Derogs'],
                                               right=True, include_lowest=True)
@@ -854,7 +861,8 @@ if 'scored_data' in st.session_state and not st.session_state['scored_data'].emp
         st.markdown("<h4>Average Statistics by Loan Decision (Group 1: Counts & Indicators)</h4>")
         features_group1 = [col for col in GROUP_1_COUNTS_INDICATORS if col in df_display.columns]
         if features_group1:
-            df_numeric_for_stats = df_display[features_group1 + ['Decision']].apply(pd.to_numeric, errors='coerce').fillna(0)
+            # These columns are already converted to numeric at the top of this block
+            df_numeric_for_stats = df_display[features_group1 + ['Decision']]
             summary_stats_group1 = df_numeric_for_stats.groupby('Decision').mean().T.reset_index()
             summary_stats_group1.columns = ['Feature', 'Approved Avg', 'Rejected Avg']
             summary_stats_long_group1 = summary_stats_group1.melt(
@@ -885,7 +893,8 @@ if 'scored_data' in st.session_state and not st.session_state['scored_data'].emp
         st.markdown("<h4>Average Statistics by Loan Decision (Group 2: Time & Percentages)</h4>")
         features_group2 = [col for col in GROUP_2_TIME_PERCENTAGES if col in df_display.columns]
         if features_group2:
-            df_numeric_for_stats = df_display[features_group2 + ['Decision']].apply(pd.to_numeric, errors='coerce').fillna(0)
+            # These columns are already converted to numeric at the top of this block
+            df_numeric_for_stats = df_display[features_group2 + ['Decision']]
             summary_stats_group2 = df_numeric_for_stats.groupby('Decision').mean().T.reset_index()
             summary_stats_group2.columns = ['Feature', 'Approved Avg', 'Rejected Avg']
             summary_stats_long_group2 = summary_stats_group2.melt(
@@ -912,7 +921,8 @@ if 'scored_data' in st.session_state and not st.session_state['scored_data'].emp
         st.markdown("<h4>Average Statistics by Loan Decision (Group 3: Sums & Max Sums)</h4>")
         features_group3 = [col for col in GROUP_3_SUMS_MAXSUMS if col in df_display.columns]
         if features_group3:
-            df_numeric_for_stats = df_display[features_group3 + ['Decision']].apply(pd.to_numeric, errors='coerce').fillna(0)
+            # These columns are already converted to numeric at the top of this block
+            df_numeric_for_stats = df_display[features_group3 + ['Decision']]
             summary_stats_group3 = df_numeric_for_stats.groupby('Decision').mean().T.reset_index()
             summary_stats_group3.columns = ['Feature', 'Approved Avg', 'Rejected Avg']
             summary_stats_long_group3 = summary_stats_group3.melt(
@@ -959,7 +969,10 @@ if 'scored_data' in st.session_state and not st.session_state['scored_data'].emp
             score = row['Score']
             decision = row['Decision']
             
-            loan_features = row[NUMERICAL_FEATURES + CATEGORICAL_FEATURES].dropna().to_dict()
+            # Ensure features passed to LLM are numeric where expected
+            loan_features = row[NUMERICAL_FEATURES + CATEGORICAL_FEATURES].apply(
+                lambda x: pd.to_numeric(x, errors='coerce').fillna(0) if x.name in NUMERICAL_FEATURES else x
+            ).dropna().to_dict()
 
             with st.expander(f"Explain why Loan ID: **{loan_id}** (Score: {score:.2f}, Decision: {decision}) was rejected"):
                 with st.spinner(f"Generating explanation for {loan_id}..."):
