@@ -8,22 +8,16 @@ import json
 import requests
 import boto3
 import random
-
+import plotly.express as px
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.neural_network import MLPClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
 
-import plotly.express as px
-
 # --- Session State ---
 st.session_state.setdefault('scored_data', pd.DataFrame())
-st.session_state.setdefault('last_uploaded_s3_key', None)
-st.session_state.setdefault('file_uploader_key', 0)
 st.session_state.setdefault('approval_threshold', 50)
-st.session_state.setdefault('uploaded_df_columns', [])
-st.session_state.setdefault('selected_target_column', 'TARGET')
 
 # --- Define Features ---
 NUMERICAL_FEATURES = [
@@ -34,9 +28,7 @@ NUMERICAL_FEATURES = [
     'TLDel90Cnt24', 'TLDel60CntAll', 'TLOpenPct', 'TLBadDerogCnt', 'TLOpen24Pct'
 ]
 
-CATEGORICAL_FEATURES = []
-
-# Dummy training data
+# Dummy training data for model simulation
 DUMMY_TARGET_COLUMN_NAME = 'TARGET'
 dummy_data_for_training = pd.concat([
     pd.DataFrame({
@@ -93,7 +85,7 @@ def get_credit_score_ml(df_input, approval_threshold):
 # --- LLM Explanation ---
 def get_llm_explanation(features_dict, score, decision):
     prompt = f"""
-    Explain in simple terms why this loan has score {score:.2f} and was {decision}.
+    Explain briefly why this loan has score {score:.2f} and was {decision}.
     Features:
     {json.dumps(features_dict, indent=2)}
     """
@@ -120,20 +112,14 @@ st.title("Credit Scoring Dashboard")
 uploaded_file = st.file_uploader("Upload Credit Data (CSV or Excel)", type=["csv", "xlsx"])
 
 if uploaded_file is not None:
-    # Read file
     if uploaded_file.name.endswith('.xlsx'):
         df = pd.read_excel(uploaded_file)
     else:
         df = pd.read_csv(uploaded_file)
 
-    # Add ID if missing
     if 'ID' not in df.columns:
         df['ID'] = df.index.astype(str)
 
-    # Target Column
-    target_col = 'default' if 'default' in df.columns else None
-
-    # Score and Decision
     scored_df = get_credit_score_ml(df, st.session_state['approval_threshold'])
     final_df = pd.concat([df, scored_df], axis=1)
     st.session_state['scored_data'] = final_df
@@ -141,26 +127,57 @@ if uploaded_file is not None:
 if not st.session_state['scored_data'].empty:
     df_display = st.session_state['scored_data']
     st.subheader("Dashboard")
-    st.write(df_display.head())
+    st.dataframe(df_display.head())
 
     # Metrics
     col1, col2, col3 = st.columns(3)
     total = len(df_display)
     approved = (df_display['Decision'] == 'Approved').sum()
+    approval_rate = approved / total * 100
     col1.metric("Total", total)
     col2.metric("Approved", approved)
-    col3.metric("Approval Rate", f"{approved/total*100:.2f}%")
+    col3.metric("Approval Rate", f"{approval_rate:.2f}%")
 
-    # Charts
+    # --- Charts ---
+    st.markdown("---")
+    st.subheader("Credit Score Distribution")
     st.plotly_chart(px.histogram(df_display, x="Score", nbins=20, title="Score Distribution"), use_container_width=True)
+
+    st.subheader("Loan Decision Breakdown")
     st.plotly_chart(px.pie(df_display, names="Decision", title="Decision Breakdown"), use_container_width=True)
 
-    # Explanations for Rejected
-    rejected = df_display[df_display['Decision'] == 'Rejected']
+    # --- Top & Bottom Scores ---
+    st.markdown("---")
+    st.subheader("Top & Bottom Scores Analysis")
+    sorted_df = df_display.sort_values(by="Score", ascending=False)
+
+    top_scores = sorted_df.head(10)
+    fig_top = px.bar(top_scores, x="ID", y="Score", title="Top 10 Highest Credit Scores", color="Score", text="Score")
+    fig_top.update_traces(texttemplate='%{text:.2f}', textposition='outside')
+    st.plotly_chart(fig_top, use_container_width=True)
+
+    bottom_scores = sorted_df.tail(10)
+    fig_bottom = px.bar(bottom_scores, x="ID", y="Score", title="Top 10 Lowest Credit Scores", color="Score", text="Score")
+    fig_bottom.update_traces(texttemplate='%{text:.2f}', textposition='outside')
+    st.plotly_chart(fig_bottom, use_container_width=True)
+
+    # --- Summary Statistics ---
+    st.markdown("---")
+    st.subheader("Summary Statistics for Credit Scores")
+    summary_stats = df_display['Score'].describe().to_frame().rename(columns={'Score': 'Value'})
+    summary_stats.loc['approval_rate'] = approval_rate
+    st.dataframe(summary_stats.style.format("{:.2f}"))
+
+    # --- Explanations for Rejected Loans ---
+    st.markdown("---")
     st.subheader("AI Explanations for Rejected Loans")
-    for _, row in rejected.iterrows():
-        with st.expander(f"Explain Loan ID: {row['ID']} (Score: {row['Score']:.2f})"):
-            explanation = get_llm_explanation(row[NUMERICAL_FEATURES].to_dict(), row['Score'], row['Decision'])
-            st.write(explanation)
+    rejected = df_display[df_display['Decision'] == 'Rejected']
+    if not rejected.empty:
+        for _, row in rejected.iterrows():
+            with st.expander(f"Explain Loan ID: {row['ID']} (Score: {row['Score']:.2f})"):
+                explanation = get_llm_explanation(row[NUMERICAL_FEATURES].to_dict(), row['Score'], row['Decision'])
+                st.write(explanation)
+    else:
+        st.info("No rejected loans at the current threshold.")
 else:
     st.info("Upload a CSV or Excel file to begin analysis.")
