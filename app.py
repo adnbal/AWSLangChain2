@@ -22,8 +22,9 @@ import plotly.graph_objects as go
 
 # --- Initialize session state variables using setdefault for robustness ---
 st.session_state.setdefault('scored_data', pd.DataFrame())
+st.session_state.setdefault('analyze_triggered', False) # Flag to explicitly trigger analysis
 st.session_state.setdefault('last_uploaded_s3_key', None)
-st.session_state.setdefault('selected_file_for_analysis_s3_key', None) # Renamed for clarity
+st.session_state.setdefault('selected_file_for_analysis', None) # Stores the S3 key of the file to analyze
 st.session_state.setdefault('file_uploader_key', 0) 
 st.session_state.setdefault('approval_threshold', 50) # Default approval threshold
 st.session_state.setdefault('uploaded_df_columns', []) # To store columns of the last uploaded file
@@ -585,7 +586,7 @@ if uploaded_file is not None:
         st.session_state['last_uploaded_s3_key'] = s3_file_key
         st.session_state['scored_data'] = pd.DataFrame() # Clear previous data to force re-analysis
         st.session_state['analyze_triggered'] = False # Reset trigger state
-        st.session_state['selected_file_for_analysis_s3_key'] = None # Clear selected file for analysis
+        st.session_state['selected_file_for_analysis'] = None # Clear selected file for analysis
         st.sidebar.info("File uploaded. Please select it from the dropdown below and click 'Analyze'.")
         time.sleep(1) 
 
@@ -662,7 +663,7 @@ with st.sidebar.form("analysis_trigger_form"):
     if analyze_submitted:
         if selected_s3_file_in_form and st.session_state['selected_target_column']:
             # Set the file to analyze and trigger the analysis logic
-            st.session_state['selected_file_for_analysis_s3_key'] = selected_s3_file_in_form 
+            st.session_state['selected_file_for_analysis'] = selected_s3_file_in_form 
             st.session_state['analyze_triggered'] = True # Explicitly set trigger
             st.session_state['scored_data'] = pd.DataFrame() # Clear old data
             st.rerun() # Force a rerun to immediately trigger the analysis block
@@ -673,7 +674,7 @@ with st.sidebar.form("analysis_trigger_form"):
 if not st.session_state['scored_data'].empty:
     if st.sidebar.button("Clear Displayed Data", key="clear_data_button_sidebar"):
         st.session_state['scored_data'] = pd.DataFrame()
-        st.session_state['selected_file_for_analysis_s3_key'] = None
+        st.session_state['selected_file_for_analysis'] = None
         st.session_state['analyze_triggered'] = False # Reset trigger
         st.sidebar.success("Displayed data cleared.")
         st.rerun() 
@@ -681,14 +682,14 @@ if not st.session_state['scored_data'].empty:
 # --- Main Dashboard Content: Analysis and Display Logic ---
 
 # This block performs analysis ONLY if the analyze_triggered flag is set
-if st.session_state['analyze_triggered'] and st.session_state['selected_file_for_analysis_s3_key']:
-    file_to_analyze = st.session_state['selected_file_for_analysis_s3_key']
+if st.session_state['analyze_triggered'] and st.session_state['selected_file_for_analysis']:
+    file_to_analyze = st.session_state['selected_file_for_analysis']
     actual_target_col_name = st.session_state['selected_target_column'] 
 
     if not actual_target_col_name:
         st.error("No target column selected. Please select one from the dropdown.")
         st.session_state['analyze_triggered'] = False # Reset trigger
-        st.session_state['selected_file_for_analysis_s3_key'] = None 
+        st.session_state['selected_file_for_analysis'] = None 
     else:
         try:
             with st.spinner(f"Downloading and analyzing '{file_to_analyze}' from S3..."):
@@ -706,7 +707,7 @@ if st.session_state['analyze_triggered'] and st.session_state['selected_file_for
                     st.error(f"The selected target column '{actual_target_col_name}' was not found in the uploaded data. Please check your CSV and select the correct column.")
                     st.session_state['scored_data'] = pd.DataFrame()
                     st.session_state['analyze_triggered'] = False
-                    st.session_state['selected_file_for_analysis_s3_key'] = None
+                    st.session_state['selected_file_for_analysis'] = None
                     st.rerun() # Rerun to show error and reset state
                     
                 results_df = get_credit_score_ml(df.copy(), st.session_state['approval_threshold'], actual_target_col_name) 
@@ -726,7 +727,7 @@ if st.session_state['analyze_triggered'] and st.session_state['selected_file_for
             st.write(f"Detailed error: {e}") # Provide more detailed error to user
             st.session_state['scored_data'] = pd.DataFrame() # Clear on error
             st.session_state['analyze_triggered'] = False # Reset trigger
-            st.session_state['selected_file_for_analysis_s3_key'] = None # Reset on error
+            st.session_state['selected_file_for_analysis'] = None # Reset on error
             st.rerun() # Rerun to show error and reset state
 
 # --- Display Dashboard Results if scored_data is available ---
