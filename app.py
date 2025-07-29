@@ -2,14 +2,11 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import io
-import datetime
-import time
 import json
 import requests
-import boto3
 import random
 import plotly.express as px
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.preprocessing import StandardScaler
 from sklearn.compose import ColumnTransformer
 from sklearn.neural_network import MLPClassifier
 from sklearn.pipeline import Pipeline
@@ -28,7 +25,7 @@ NUMERICAL_FEATURES = [
     'TLDel90Cnt24', 'TLDel60CntAll', 'TLOpenPct', 'TLBadDerogCnt', 'TLOpen24Pct'
 ]
 
-# Dummy training data for model simulation
+# Dummy training data
 DUMMY_TARGET_COLUMN_NAME = 'TARGET'
 dummy_data_for_training = pd.concat([
     pd.DataFrame({
@@ -65,18 +62,13 @@ model_pipeline = get_model_pipeline()
 # --- Score Function ---
 def get_credit_score_ml(df_input, approval_threshold):
     df = df_input.copy()
-
-    # Fill missing features with 0
     missing_cols = [f for f in NUMERICAL_FEATURES if f not in df.columns]
     if missing_cols:
         st.warning(f"Missing columns filled with 0: {missing_cols}")
         for col in missing_cols:
             df[col] = 0.0
-
-    # Convert numeric
     for col in NUMERICAL_FEATURES:
         df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-
     probabilities = model_pipeline.predict_proba(df[NUMERICAL_FEATURES])
     scores = probabilities[:, 0] * 100
     decisions = np.where(scores >= approval_threshold, "Approved", "Rejected")
@@ -116,10 +108,8 @@ if uploaded_file is not None:
         df = pd.read_excel(uploaded_file)
     else:
         df = pd.read_csv(uploaded_file)
-
     if 'ID' not in df.columns:
         df['ID'] = df.index.astype(str)
-
     scored_df = get_credit_score_ml(df, st.session_state['approval_threshold'])
     final_df = pd.concat([df, scored_df], axis=1)
     st.session_state['scored_data'] = final_df
@@ -146,18 +136,33 @@ if not st.session_state['scored_data'].empty:
     st.subheader("Loan Decision Breakdown")
     st.plotly_chart(px.pie(df_display, names="Decision", title="Decision Breakdown"), use_container_width=True)
 
-    # --- Top & Bottom Scores ---
+    # --- Top & Bottom Scores (Ordered Horizontal) ---
     st.markdown("---")
     st.subheader("Top & Bottom Scores Analysis")
-    sorted_df = df_display.sort_values(by="Score", ascending=False)
 
-    top_scores = sorted_df.head(10)
-    fig_top = px.bar(top_scores, x="ID", y="Score", title="Top 10 Highest Credit Scores", color="Score", text="Score")
+    # Top 10 Highest Scores
+    top_scores = df_display.sort_values(by="Score", ascending=False).head(10).sort_values(by="Score", ascending=True)
+    fig_top = px.bar(
+        top_scores,
+        x="Score", y="ID",
+        orientation="h",
+        title="Top 10 Highest Credit Scores",
+        color="Score",
+        text="Score"
+    )
     fig_top.update_traces(texttemplate='%{text:.2f}', textposition='outside')
     st.plotly_chart(fig_top, use_container_width=True)
 
-    bottom_scores = sorted_df.tail(10)
-    fig_bottom = px.bar(bottom_scores, x="ID", y="Score", title="Top 10 Lowest Credit Scores", color="Score", text="Score")
+    # Top 10 Lowest Scores
+    bottom_scores = df_display.sort_values(by="Score", ascending=True).head(10)
+    fig_bottom = px.bar(
+        bottom_scores.sort_values(by="Score", ascending=False),
+        x="Score", y="ID",
+        orientation="h",
+        title="Top 10 Lowest Credit Scores",
+        color="Score",
+        text="Score"
+    )
     fig_bottom.update_traces(texttemplate='%{text:.2f}', textposition='outside')
     st.plotly_chart(fig_bottom, use_container_width=True)
 
