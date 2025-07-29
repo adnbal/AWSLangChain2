@@ -4,7 +4,6 @@ import numpy as np
 import json
 import requests
 import plotly.express as px
-import random
 
 # --- Session State ---
 st.session_state.setdefault('scored_data', pd.DataFrame())
@@ -19,7 +18,7 @@ NUMERICAL_FEATURES = [
     'TLDel90Cnt24', 'TLDel60CntAll', 'TLOpenPct', 'TLBadDerogCnt', 'TLOpen24Pct'
 ]
 
-# --- Simulated Scoring Function (More Realistic) ---
+# --- Simulated Realistic Scoring ---
 def get_credit_score_realistic(df_input, approval_threshold):
     df = df_input.copy()
 
@@ -28,7 +27,7 @@ def get_credit_score_realistic(df_input, approval_threshold):
     for col in missing_cols:
         df[col] = 0
 
-    # Simulate realistic credit scores: majority high
+    # Simulate realistic credit scores (mean ~75, std dev 10)
     np.random.seed(42)  # Reproducibility
     scores = np.random.normal(75, 10, len(df))  # Mean 75, std dev 10
     scores = np.clip(scores, 0, 100)  # Keep between 0 and 100
@@ -37,7 +36,7 @@ def get_credit_score_realistic(df_input, approval_threshold):
     decisions = np.where(scores >= approval_threshold, "Approved", "Rejected")
     return pd.DataFrame({'Score': scores, 'Decision': decisions})
 
-# --- LLM Explanation ---
+# --- LLM Explanation (Optional) ---
 def get_llm_explanation(features_dict, score, decision):
     prompt = f"""
     Explain briefly why this loan has score {score:.2f} and was {decision}.
@@ -61,7 +60,7 @@ def get_llm_explanation(features_dict, score, decision):
 
 # --- Streamlit Layout ---
 st.set_page_config(page_title="Credit Scoring Dashboard", layout="wide")
-st.title("Credit Scoring Dashboard (Realistic Version)")
+st.title("Credit Scoring Dashboard (Realistic Scores)")
 
 # --- File Upload ---
 uploaded_file = st.file_uploader("Upload Credit Data (CSV or Excel)", type=["csv", "xlsx"])
@@ -81,17 +80,18 @@ if uploaded_file is not None:
     final_df = pd.concat([df, scored_df], axis=1)
     st.session_state['scored_data'] = final_df
 
-# --- Display Dashboard ---
+# --- Dashboard Display ---
 if not st.session_state['scored_data'].empty:
     df_display = st.session_state['scored_data']
+    df_display['Score'] = pd.to_numeric(df_display['Score'], errors='coerce').fillna(0)
 
-    # Debug
+    # Debug Info
     st.write("DEBUG: Score Summary", df_display['Score'].describe())
 
+    # Metrics
     st.subheader("Dashboard")
     st.dataframe(df_display.head())
 
-    # --- Metrics ---
     col1, col2, col3 = st.columns(3)
     total = len(df_display)
     approved = (df_display['Decision'] == 'Approved').sum()
@@ -114,20 +114,26 @@ if not st.session_state['scored_data'].empty:
     # --- Top & Bottom Scores ---
     st.markdown("---")
     st.subheader("Top & Bottom Scores Analysis")
+
     top_scores = df_display.sort_values(by="Score", ascending=False).head(10)
     bottom_scores = df_display.sort_values(by="Score", ascending=True).head(10)
 
-    # Top Scores
-    fig_top = px.bar(top_scores.sort_values(by="Score"), x="Score", y="ID", orientation="h",
-                     title="Top 10 Highest Credit Scores", text="Score", color_discrete_sequence=["green"])
-    fig_top.update_traces(texttemplate='%{text:.2f}', textposition='inside')
-    st.plotly_chart(fig_top, use_container_width=True)
+    if top_scores['Score'].sum() == 0 or bottom_scores['Score'].sum() == 0:
+        st.warning("⚠ No valid score variation found. Check your input data or scoring function.")
+    else:
+        # Top Scores (Green)
+        fig_top = px.bar(top_scores.sort_values(by="Score"), x="Score", y="ID",
+                         orientation="h", title="Top 10 Highest Credit Scores",
+                         text="Score", color_discrete_sequence=["green"])
+        fig_top.update_traces(texttemplate='%{text:.2f}', textposition='inside')
+        st.plotly_chart(fig_top, use_container_width=True)
 
-    # Bottom Scores
-    fig_bottom = px.bar(bottom_scores.sort_values(by="Score"), x="Score", y="ID", orientation="h",
-                        title="Top 10 Lowest Credit Scores", text="Score", color_discrete_sequence=["red"])
-    fig_bottom.update_traces(texttemplate='%{text:.2f}', textposition='inside')
-    st.plotly_chart(fig_bottom, use_container_width=True)
+        # Bottom Scores (Red)
+        fig_bottom = px.bar(bottom_scores.sort_values(by="Score"), x="Score", y="ID",
+                            orientation="h", title="Top 10 Lowest Credit Scores",
+                            text="Score", color_discrete_sequence=["red"])
+        fig_bottom.update_traces(texttemplate='%{text:.2f}', textposition='inside')
+        st.plotly_chart(fig_bottom, use_container_width=True)
 
     # --- Summary Stats ---
     st.markdown("---")
@@ -136,7 +142,7 @@ if not st.session_state['scored_data'].empty:
     summary_stats.loc['approval_rate'] = approval_rate
     st.dataframe(summary_stats.style.format("{:.2f}"))
 
-    # --- AI Explanations ---
+    # --- AI Explanations for Rejected Loans ---
     st.markdown("---")
     st.subheader("AI Explanations for Rejected Loans")
     rejected = df_display[df_display['Decision'] == 'Rejected']
