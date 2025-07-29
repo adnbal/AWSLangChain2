@@ -8,7 +8,7 @@ import os
 import time # For a small delay
 import json # For parsing LLM structured output
 import asyncio # For running async functions in a synchronous context
-import requests # NEW: For making HTTP requests to the LLM API
+import requests # For making HTTP requests to the LLM API
 
 # Import scikit-learn components
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
@@ -221,10 +221,10 @@ def get_credit_score_ml(df_input: pd.DataFrame, approval_threshold: int, actual_
     return pd.DataFrame({'Score': scores, 'Decision': decisions})
 
 
-# --- LLM Integration for Explanations (MODIFIED TO USE requests) ---
+# --- LLM Integration for Explanations (MODIFIED TO USE OpenAI API) ---
 def get_llm_explanation(features_dict: dict, score: float, decision: str):
     """
-    Calls a Gemini LLM to get an explanation for a loan decision using requests.
+    Calls an OpenAI LLM to get an explanation for a loan decision using requests.
     """
     prompt = f"""
     You are an expert credit risk analyst. Based on the following loan application features, 
@@ -237,29 +237,43 @@ def get_llm_explanation(features_dict: dict, score: float, decision: str):
     Provide a brief, clear explanation (max 50 words).
     """
     
-    chatHistory = []
-    chatHistory.append({ "role": "user", "parts": [{ "text": prompt }] }) 
-    
-    apiKey = "" 
-    apiUrl = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={apiKey}"
-    
     try:
-        # Using requests.post for the HTTP call
+        # Get OpenAI API key from Streamlit secrets
+        openai_api_key = st.secrets["openai_api_key"]
+        
+        # OpenAI API endpoint for chat completions
+        apiUrl = "https://api.openai.com/v1/chat/completions"
+        
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {openai_api_key}"
+        }
+        
+        payload = {
+            "model": "gpt-3.5-turbo", # You can change this to 'gpt-4' or other models if available
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 100, # Limit response length
+            "temperature": 0.7 # Control creativity
+        }
+        
         response = requests.post(
             apiUrl,
-            headers={'Content-Type': 'application/json'},
-            json={"contents": chatHistory} # Use json parameter for dictionary payload
+            headers=headers,
+            json=payload
         )
         response.raise_for_status() # Raise an exception for HTTP errors (e.g., 4xx or 5xx)
         
         result = response.json()
         
-        if result and result.get('candidates') and len(result['candidates']) > 0 and \
-           result['candidates'][0].get('content') and result['candidates'][0]['content'].get('parts') and \
-           len(result['candidates'][0]['content']['parts']) > 0:
-            return result['candidates'][0]['content']['parts'][0]['text']
+        # OpenAI response parsing
+        if result and result.get('choices') and len(result['choices']) > 0 and \
+           result['choices'][0].get('message') and result['choices'][0]['message'].get('content'):
+            return result['choices'][0]['message']['content']
         else:
             return "LLM could not generate an explanation."
+    except KeyError:
+        st.error("OpenAI API Key not found in Streamlit secrets. Please ensure 'openai_api_key' is set.")
+        return "Failed to get explanation from LLM (API Key missing)."
     except requests.exceptions.RequestException as e:
         st.error(f"Error calling LLM for explanation: {e}")
         return "Failed to get explanation from LLM."
