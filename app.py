@@ -33,9 +33,9 @@ st.session_state.setdefault('selected_target_column', 'TARGET') # Default target
 NUMERICAL_FEATURES = [
     'DerogCnt', 'CollectCnt', 'BanruptcyInd', 'InqCnt06', 'InqTimeLast', 'InqFinanceCnt24',
     'TLTimeFirst', 'TLTimeLast', 'TLCnt03', 'TLCnt12', 'TLCnt24', 'TLCnt',
-    'TLSum', 'TLMaxSum', 'TLSatCnt', 'TLDel60Cnt', 'TLBadCnt24',
-    'TL75UtilCnt', 'TL50UtilCnt', 'TLBalHCPct', 'TLSatPct', 'TLDel3060Cnt24',
-    'TLDel90Cnt24', 'TLDel60CntAll', 'TLOpenPct', 'TLBadDerogCnt', 'TLOpen24Pct'
+    'TLSum', 'TLMaxSum', 'TLSatCnt', 'TLDel60Cnt', 'TLDel60Cnt24', # Added TLDel60Cnt24 here to match CSV
+    'TLBadCnt24', 'TL75UtilCnt', 'TL50UtilCnt', 'TLBalHCPct', 'TLSatPct', 'TLDel3060Cnt24',
+    'TLDel90Cnt24', 'TLDel60CntAll', 'TLOpenPct', 'TLBadDerogCnt', 'TLOpen24Pct' # Removed the duplicate TLDel60Cnt24 from here
 ]
 CATEGORICAL_FEATURES = [] # No explicit categorical features based on previous analysis
 
@@ -45,7 +45,7 @@ GROUP_1_COUNTS_INDICATORS = [
     'DerogCnt', 'CollectCnt', 'BanruptcyInd', 'InqCnt06', 'InqFinanceCnt24',
     'TLCnt03', 'TLCnt12', 'TLCnt24', 'TLCnt', 'TLSatCnt', 'TLDel60Cnt',
     'TLBadCnt24', 'TL75UtilCnt', 'TL50UtilCnt', 'TLDel3060Cnt24',
-    'TLDel90Cnt24', 'TLDel60CntAll', 'TLBadDerogCnt'
+    'TLDel90Cnt24', 'TLDel60CntAll', 'TLBadDerogCnt', 'TLDel60Cnt24' # Added TLDel60Cnt24 here for plotting
 ]
 
 GROUP_2_TIME_PERCENTAGES = [
@@ -84,6 +84,7 @@ dummy_data_for_training = pd.concat([
         'TLMaxSum': [15000, 18000, 16000, 20000, 12000, 17000, 19000, 14000, 13000, 22000, 15000, 18000, 16000, 20000, 12000, 17000, 19000, 14000, 13000, 22000],
         'TLSatCnt': [8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9],
         'TLDel60Cnt': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        'TLDel60Cnt24': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], # Added to dummy data
         'TLBadCnt24': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         'TL75UtilCnt': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         'TL50UtilCnt': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -115,6 +116,7 @@ dummy_data_for_training = pd.concat([
         'TLMaxSum': [5000, 7000, 4000, 8000, 6000, 7500, 5500, 6500, 4500, 8500],
         'TLSatCnt': [2, 3, 1, 4, 2, 3, 1, 4, 2, 3],
         'TLDel60Cnt': [1, 2, 1, 2, 1, 2, 1, 2, 1, 2],
+        'TLDel60Cnt24': [1, 2, 3, 1, 2, 3, 1, 2, 3, 1], # Added to dummy data
         'TLBadCnt24': [1, 1, 2, 1, 1, 2, 1, 1, 2, 1],
         'TL75UtilCnt': [3, 4, 2, 5, 3, 4, 2, 5, 3, 4],
         'TL50UtilCnt': [5, 6, 4, 7, 5, 6, 4, 7, 5, 6],
@@ -180,6 +182,15 @@ def get_credit_score_ml(df_input: pd.DataFrame, approval_threshold: int, actual_
     """
     df_processed = df_input.copy()
 
+    # --- IMPORTANT: Handle duplicate column name from CSV ---
+    # Pandas renames duplicate columns with '.1', '.2', etc.
+    # We assume the first instance of 'TLDel60Cnt24' is the one we want to use for the model.
+    # If 'TLDel60Cnt24.1' exists, it means there was a duplicate in the CSV. Drop it.
+    if 'TLDel60Cnt24.1' in df_processed.columns:
+        st.write("DEBUG: Dropping duplicate column 'TLDel60Cnt24.1' found in uploaded CSV.")
+        df_processed = df_processed.drop(columns=['TLDel60Cnt24.1'])
+
+
     # Define features to be used for prediction (excluding the actual target column and 'ID')
     features_for_prediction = [col for col in NUMERICAL_FEATURES + CATEGORICAL_FEATURES if col != actual_target_column and col != 'ID']
 
@@ -212,6 +223,7 @@ def get_credit_score_ml(df_input: pd.DataFrame, approval_threshold: int, actual_
     df_processed_for_prediction.info(buf=buffer)
     st.text(buffer.getvalue())
     st.write(f"DEBUG: Total NaNs in data before prediction: {df_processed_for_prediction.isnull().sum().sum()}")
+    st.write(f"DEBUG: Columns used for prediction: {df_processed_for_prediction.columns.tolist()}")
 
 
     probabilities = model_pipeline.predict_proba(df_processed_for_prediction)
@@ -404,6 +416,8 @@ if st.session_state['analyze_triggered'] and st.session_state['selected_file_for
             with st.spinner(f"Downloading and analyzing '{file_to_analyze}' from S3..."):
                 obj = s3_client.get_object(Bucket=s3_bucket_name, Key=file_to_analyze)
                 df = pd.read_csv(io.BytesIO(obj['Body'].read()))
+                st.write(f"DEBUG: Original columns in loaded CSV: {df.columns.tolist()}")
+
 
                 # Ensure 'ID' column exists for merging later
                 if 'ID' not in df.columns:
@@ -433,6 +447,7 @@ if st.session_state['analyze_triggered'] and st.session_state['selected_file_for
                 st.session_state['scored_data'] = df_scored
                 st.session_state['analyze_triggered'] = False # Analysis complete, reset flag
                 st.success(f"Analysis complete for '{file_to_analyze}'.")
+                st.write(f"DEBUG: Final scored_data shape: {st.session_state['scored_data'].shape}")
                 st.rerun() # Force a rerun to display the dashboard with new data
 
         except Exception as e:
@@ -447,6 +462,7 @@ if st.session_state['analyze_triggered'] and st.session_state['selected_file_for
 # --- Display Dashboard Results if scored_data is available ---
 if not st.session_state['scored_data'].empty:
     df_display = st.session_state['scored_data']
+    st.write("DEBUG: Displaying dashboard because scored_data is not empty.")
 
     st.header("Credit Scoring Dashboard")
 
@@ -542,6 +558,8 @@ if not st.session_state['scored_data'].empty:
 
 else:
     st.info("Upload a CSV file and click 'Analyze' to view the dashboard.")
+    st.write("DEBUG: scored_data is empty, so dashboard is not displayed.")
+
 
 st.markdown("---")
 st.subheader("How this app would integrate with AWS and LLM (Recap):")
