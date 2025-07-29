@@ -22,9 +22,7 @@ import plotly.graph_objects as go
 
 # --- Initialize session state variables using setdefault for robustness ---
 st.session_state.setdefault('scored_data', pd.DataFrame())
-st.session_state.setdefault('analyze_triggered', False)
-st.session_state.setdefault('last_uploaded_s3_key', None)
-st.session_state.setdefault('selected_file_for_analysis', None)
+st.session_state.setdefault('selected_file_for_analysis', None) # Stores the S3 key of the file to analyze
 st.session_state.setdefault('file_uploader_key', 0) 
 st.session_state.setdefault('approval_threshold', 50) # Default approval threshold
 st.session_state.setdefault('uploaded_df_columns', []) # To store columns of the last uploaded file
@@ -236,7 +234,7 @@ def get_credit_score_ml(df_input: pd.DataFrame, approval_threshold: int, actual_
     return pd.DataFrame({'Score': scores, 'Decision': decisions})
 
 
-# --- LLM Integration for Explanations (MODIFIED TO USE OpenAI API) ---
+# --- LLM Integration for Explanations ---
 def get_llm_explanation(features_dict: dict, score: float, decision: str):
     """
     Calls an OpenAI LLM to get an explanation for a loan decision using requests.
@@ -584,8 +582,8 @@ if uploaded_file is not None:
             s3_client.upload_fileobj(uploaded_file, s3_bucket_name, s3_file_key)
         st.sidebar.success(f"File '{file_name}' uploaded successfully to S3 as '{s3_file_key}'!")
         st.session_state['last_uploaded_s3_key'] = s3_file_key
-        st.session_state['analyze_triggered'] = False 
-        st.session_state['scored_data'] = pd.DataFrame() 
+        st.session_state['selected_file_for_analysis'] = None # Clear previous selection to force re-analysis
+        st.session_state['scored_data'] = pd.DataFrame() # Clear previous data
         st.sidebar.info("File uploaded. Please select it from the dropdown below and click 'Analyze'.")
         time.sleep(1) 
 
@@ -660,31 +658,36 @@ with st.sidebar.form("analysis_trigger_form"):
 
     if analyze_submitted:
         if selected_s3_file_in_form and st.session_state['selected_target_column']:
-            st.session_state['selected_file_for_analysis'] = selected_s3_file_in_form 
-            st.session_state['analyze_triggered'] = True 
-            st.rerun() 
+            # Set the file to analyze. The main analysis block will pick this up.
+            st.session_state['selected_file_for_analysis'] = selected_s3_file_in_form
+            # Clear scored_data to force re-analysis if a new file is selected or re-analyzed
+            st.session_state['scored_data'] = pd.DataFrame() 
+            # No st.rerun() here, form submission implicitly reruns.
         else:
             st.sidebar.warning("Please select a file and a target column to analyze.")
-            st.session_state['analyze_triggered'] = False
 
 if st.session_state['scored_data'] is not None and not st.session_state['scored_data'].empty:
     if st.sidebar.button("Clear Displayed Data", key="clear_data_button_sidebar"):
         st.session_state['scored_data'] = pd.DataFrame()
-        st.session_state['analyze_triggered'] = False
-        st.session_state['selected_file_for_analysis'] = None
+        st.session_state['selected_file_for_analysis'] = None # Also clear selected file
         st.sidebar.success("Displayed data cleared.")
         st.rerun() 
 
-# --- Main Dashboard Content ---
-if st.session_state['analyze_triggered'] and st.session_state['selected_file_for_analysis']:
+# --- Main Dashboard Content: Analysis and Display Logic ---
+
+# This block performs analysis ONLY if a file is selected AND scored_data is empty
+# OR if the selected file has changed since the last scoring.
+if st.session_state['selected_file_for_analysis'] and \
+   (st.session_state['scored_data'].empty or \
+    st.session_state['scored_data'].attrs.get('source_file') != st.session_state['selected_file_for_analysis']):
+
     file_to_analyze = st.session_state['selected_file_for_analysis']
-    actual_target_col_name = st.session_state['selected_target_column']
+    actual_target_col_name = st.session_state['selected_target_column'] 
 
     if not actual_target_col_name:
         st.error("No target column selected. Please select one from the dropdown.")
-        st.session_state['analyze_triggered'] = False
-        st.session_state['selected_file_for_analysis'] = None
-        st.stop()
+        st.session_state['selected_file_for_analysis'] = None # Reset to force re-selection
+        st.stop() # Stop execution to prevent further errors
 
     try:
         with st.spinner(f"Downloading and analyzing '{file_to_analyze}' from S3..."):
@@ -701,7 +704,6 @@ if st.session_state['analyze_triggered'] and st.session_state['selected_file_for
             else:
                 st.error(f"The selected target column '{actual_target_col_name}' was not found in the uploaded data. Please check your CSV and select the correct column.")
                 st.session_state['scored_data'] = pd.DataFrame()
-                st.session_state['analyze_triggered'] = False
                 st.session_state['selected_file_for_analysis'] = None
                 st.stop() 
 
@@ -713,21 +715,23 @@ if st.session_state['analyze_triggered'] and st.session_state['selected_file_for
 
             df_scored = pd.concat([df, results_df], axis=1)
             st.session_state['scored_data'] = df_scored
+            # Store the source file name as an attribute of the DataFrame for comparison
+            st.session_state['scored_data'].attrs['source_file'] = file_to_analyze
             st.success(f"Analysis complete for '{file_to_analyze}'.")
-            st.session_state['analyze_triggered'] = False 
-            st.session_state['selected_file_for_analysis'] = None 
+            st.rerun() # Force a rerun to display the dashboard with new data
 
     except Exception as e:
         st.error(f"Error analyzing file from S3: {e}. Please check file format and column names in your CSV file.")
-        st.session_state['scored_data'] = pd.DataFrame()
-        st.session_state['analyze_triggered'] = False 
-        st.session_state['selected_file_for_analysis'] = None 
+        st.write("DEBUG: An error occurred during analysis:", e)
+        st.session_state['scored_data'] = pd.DataFrame() # Clear on error
+        st.session_state['selected_file_for_analysis'] = None # Reset on error
+        st.stop() 
 
-if 'scored_data' in st.session_state and not st.session_state['scored_data'].empty:
+# --- Display Dashboard Results if scored_data is available ---
+if not st.session_state['scored_data'].empty:
     df_display = st.session_state['scored_data']
 
     # --- Ensure numerical columns are truly numeric before aggregation and plotting ---
-    # This is the key fix for the ValueError
     numerical_cols_for_display = ['TLSum', 'Score', 'TLCnt', 'TLBadCnt24'] + \
                                  GROUP_1_COUNTS_INDICATORS + GROUP_2_TIME_PERCENTAGES + GROUP_3_SUMS_MAXSUMS + \
                                  ['DerogCnt'] # Add DerogCnt for the pie chart binning
@@ -742,7 +746,6 @@ if 'scored_data' in st.session_state and not st.session_state['scored_data'].emp
     col_metrics = st.columns(4)
 
     # Dummy data for sparklines (replace with actual time series if available)
-    # For demonstration, let's create a simple dummy time series based on the number of rows
     num_rows = len(df_display)
     dummy_dates = pd.date_range(start='2024-01-01', periods=num_rows, freq='D') # Daily data
     dummy_trend_data = pd.DataFrame({
@@ -993,6 +996,7 @@ if 'scored_data' in st.session_state and not st.session_state['scored_data'].emp
 
 
 else:
+    # Display this message if no data is loaded or analysis hasn't run yet
     st.info("Upload a CSV file and click 'Analyze' to view the dashboard.")
 
 # --- AWS and LLM Integration Explanation (Recap) ---
