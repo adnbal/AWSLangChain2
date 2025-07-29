@@ -710,8 +710,11 @@ if 'scored_data' in st.session_state and not st.session_state['scored_data'].emp
     if not features_for_stats:
         st.info("No numerical features available for calculating average statistics.")
     else:
-        approved_stats = df_display[df_display['Decision'] == 'Approved'][features_for_stats].mean().rename('Approved Avg')
-        rejected_stats = df_display[df_display['Decision'] == 'Rejected'][features_for_stats].mean().rename('Rejected Avg')
+        # Ensure selected columns are numeric before calculating mean
+        df_numeric_for_stats = df_display[features_for_stats].apply(pd.to_numeric, errors='coerce').fillna(0) # Fill NaN with 0 for mean calculation
+        
+        approved_stats = df_numeric_for_stats[df_display['Decision'] == 'Approved'].mean().rename('Approved Avg')
+        rejected_stats = df_numeric_for_stats[df_display['Decision'] == 'Rejected'].mean().rename('Rejected Avg')
 
         # Combine into a single DataFrame for display
         summary_stats_df = pd.DataFrame([approved_stats, rejected_stats]).T
@@ -738,7 +741,7 @@ if 'scored_data' in st.session_state and not st.session_state['scored_data'].emp
             with st.expander(f"Explain why Loan ID: **{loan_id}** (Score: {score:.2f}, Decision: {decision}) was rejected"):
                 # Use st.spinner for synchronous LLM call
                 with st.spinner(f"Generating explanation for {loan_id}..."):
-                    explanation = get_llm_explanation(loan_features, score, decision) # No 'await' here
+                    explanation = get_llm_explanation(loan_features, score, decision) 
                     st.markdown(explanation)
     else:
         st.info("No rejected loans to generate explanations for at the current threshold.")
