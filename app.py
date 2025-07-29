@@ -39,6 +39,24 @@ NUMERICAL_FEATURES = [
 ]
 CATEGORICAL_FEATURES = [] # No explicit categorical features based on previous analysis
 
+# Define numerical features specifically for plotting average statistics (excluding TLTimeFirst)
+# These groups were introduced to address scaling issues in the "Average Statistics" graph
+GROUP_1_COUNTS_INDICATORS = [
+    'DerogCnt', 'CollectCnt', 'BanruptcyInd', 'InqCnt06', 'InqFinanceCnt24',
+    'TLCnt03', 'TLCnt12', 'TLCnt24', 'TLCnt', 'TLSatCnt', 'TLDel60Cnt',
+    'TLBadCnt24', 'TL75UtilCnt', 'TL50UtilCnt', 'TLDel3060Cnt24',
+    'TLDel90Cnt24', 'TLDel60CntAll', 'TLBadDerogCnt'
+]
+
+GROUP_2_TIME_PERCENTAGES = [
+    'InqTimeLast', 'TLTimeLast', 'TLBalHCPct', 'TLSatPct', 'TLOpenPct', 'TLOpen24Pct'
+]
+
+GROUP_3_SUMS_MAXSUMS = [
+    'TLSum', 'TLMaxSum'
+]
+
+
 # Dummy target column name for model training
 DUMMY_TARGET_COLUMN_NAME = 'TARGET' 
 
@@ -224,7 +242,7 @@ def get_llm_explanation(features_dict: dict, score: float, decision: str):
     """
     
     try:
-        # Get OpenAI API key from Streamlit secrets, accessing the nested structure
+        # Corrected access to OpenAI API key from Streamlit secrets
         openai_api_key = st.secrets["openai"]["api_key"]
         
         # OpenAI API endpoint for chat completions
@@ -531,20 +549,48 @@ if not st.session_state['scored_data'].empty:
 
     st.markdown("---")
 
-    # Average feature values by decision
-    st.subheader("Average Feature Values by Loan Decision")
-    # Select only numerical columns for this aggregation, excluding 'ID' and the target column
-    numerical_cols_for_avg = [col for col in NUMERICAL_FEATURES if col in df_display.columns]
-    
-    if numerical_cols_for_avg:
+    # Average feature values by decision - Group 1
+    st.subheader("Average Statistics by Loan Decision (Group 1: Counts & Indicators)")
+    features_group1 = [col for col in GROUP_1_COUNTS_INDICATORS if col in df_display.columns]
+    if features_group1:
         # Ensure numerical columns are truly numeric before aggregation
-        for col in numerical_cols_for_avg:
+        for col in features_group1:
+            df_display[col] = pd.to_numeric(df_display[col], errors='coerce').fillna(0)
+        
+        avg_features_by_decision_group1 = df_display.groupby('Decision')[features_group1].mean().T
+        st.dataframe(avg_features_by_decision_group1)
+    else:
+        st.info("No features in Group 1 available for showing average values by decision.")
+
+    st.markdown("---")
+
+    # Average feature values by decision - Group 2
+    st.subheader("Average Statistics by Loan Decision (Group 2: Time & Percentages)")
+    features_group2 = [col for col in GROUP_2_TIME_PERCENTAGES if col in df_display.columns]
+    if features_group2:
+        # Ensure numerical columns are truly numeric before aggregation
+        for col in features_group2:
             df_display[col] = pd.to_numeric(df_display[col], errors='coerce').fillna(0)
 
-        avg_features_by_decision = df_display.groupby('Decision')[numerical_cols_for_avg].mean().T
-        st.dataframe(avg_features_by_decision)
+        avg_features_by_decision_group2 = df_display.groupby('Decision')[features_group2].mean().T
+        st.dataframe(avg_features_by_decision_group2)
     else:
-        st.info("No numerical features available for showing average values by decision.")
+        st.info("No features in Group 2 available for showing average values by decision.")
+
+    st.markdown("---")
+
+    # Average feature values by decision - Group 3
+    st.subheader("Average Statistics by Loan Decision (Group 3: Sums & Max Sums)")
+    features_group3 = [col for col in GROUP_3_SUMS_MAXSUMS if col in df_display.columns]
+    if features_group3:
+        # Ensure numerical columns are truly numeric before aggregation
+        for col in features_group3:
+            df_display[col] = pd.to_numeric(df_display[col], errors='coerce').fillna(0)
+
+        avg_features_by_decision_group3 = df_display.groupby('Decision')[features_group3].mean().T
+        st.dataframe(avg_features_by_decision_group3)
+    else:
+        st.info("No features in Group 3 available for showing average values by decision.")
 
     st.markdown("---")
 
