@@ -6,8 +6,8 @@ import io
 import datetime
 import os
 import time
-import json
-import requests # For making HTTP requests to the LLM API
+# Removed: import json
+# Removed: import requests # For making HTTP requests to the LLM API
 
 # Import scikit-learn components
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
@@ -225,68 +225,7 @@ def get_credit_score_ml(df_input: pd.DataFrame, approval_threshold: int, actual_
     return pd.DataFrame({'Score': scores, 'Decision': decisions})
 
 
-# --- LLM Integration for Explanations ---
-def get_llm_explanation(features_dict: dict, score: float, decision: str):
-    """
-    Calls an OpenAI LLM to get an explanation for a loan decision using requests.
-    """
-    prompt = f"""
-    You are an expert credit risk analyst. Based on the following loan application features, 
-    explain concisely why this loan received a score of {score:.2f} and was {decision}.
-    Focus on 2-3 key factors from the provided features that likely influenced the decision.
-    
-    Loan Features:
-    {json.dumps(features_dict, indent=2)}
-    
-    Provide a brief, clear explanation (max 50 words).
-    """
-    
-    try:
-        # Corrected access to OpenAI API key from Streamlit secrets
-        openai_api_key = st.secrets["openai"]["api_key"]
-        
-        # OpenAI API endpoint for chat completions
-        apiUrl = "https://api.openai.com/v1/chat/completions"
-        
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {openai_api_key}"
-        }
-        
-        payload = {
-            "model": "gpt-3.5-turbo", # You can change this to 'gpt-4' or other models if available
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 100, # Limit response length
-            "temperature": 0.7 # Control creativity
-        }
-        
-        response = requests.post(
-            apiUrl,
-            headers=headers,
-            json=payload
-        )
-        response.raise_for_status() # Raise an exception for HTTP errors (e.g., 4xx or 5xx)
-        
-        result = response.json()
-        
-        # OpenAI response parsing
-        if result and result.get('choices') and len(result['choices']) > 0 and \
-           result['choices'][0].get('message') and result['choices'][0]['message'].get('content'):
-            return result['choices'][0]['message']['content']
-        else:
-            return "LLM could not generate an explanation."
-    except KeyError:
-        st.error("OpenAI API Key not found in Streamlit secrets. Please ensure 'openai.api_key' is set in your secrets.toml or Streamlit Cloud secrets.")
-        return "Failed to get explanation from LLM (API Key missing or incorrectly configured)."
-    except requests.exceptions.RequestException as e:
-        st.error(f"Error calling LLM for explanation: {e}")
-        return "Failed to get explanation from LLM."
-    except json.JSONDecodeError:
-        st.error("Failed to decode JSON response from LLM API.")
-        return "Failed to get explanation from LLM (JSON decode error)."
-    except Exception as e:
-        st.error(f"An unexpected error occurred while calling LLM: {e}")
-        return "Failed to get explanation from LLM."
+# Removed: LLM Integration for Explanations (get_llm_explanation function)
 
 
 # --- Streamlit App Layout ---
@@ -598,40 +537,8 @@ if not st.session_state['scored_data'].empty:
     st.subheader("Scored Credit Data")
     st.dataframe(df_display)
 
-    st.markdown("---")
-    st.header("AI-Powered Explanations for Rejected Loans")
-    st.info("Click on a rejected loan's ID to get an AI-generated explanation for the decision.")
-
-    vulnerable_loans = df_display[df_display['Decision'] == 'Rejected'].sort_values(by='Score', ascending=True)
-
-    if not vulnerable_loans.empty:
-        for index, row in vulnerable_loans.iterrows():
-            loan_id = row['ID']
-            score = row['Score']
-            decision = row['Decision']
-            
-            # Prepare features for LLM explanation
-            loan_features = {}
-            # Iterate over all defined features to ensure consistency
-            all_relevant_features = NUMERICAL_FEATURES + CATEGORICAL_FEATURES
-            for feature_name in all_relevant_features:
-                if feature_name in row: # Check if the feature exists in the current row
-                    value = row[feature_name]
-                    if feature_name in NUMERICAL_FEATURES:
-                        # Ensure numerical values are correctly handled, including NaNs
-                        loan_features[feature_name] = pd.to_numeric(value, errors='coerce').fillna(0)
-                    else:
-                        # Ensure categorical values are strings and handle potential NaNs
-                        loan_features[feature_name] = str(value).replace('nan', 'missing_category')
-            # Remove any features that might still be NaN or None after processing, if desired
-            loan_features = {k: v for k, v in loan_features.items() if pd.notna(v) and v is not None}
-
-            with st.expander(f"Explain why Loan ID: **{loan_id}** (Score: {score:.2f}, Decision: {decision}) was rejected"):
-                with st.spinner(f"Generating explanation for {loan_id}..."):
-                    explanation = get_llm_explanation(loan_features, score, decision)
-                    st.markdown(explanation)
-    else:
-        st.info("No rejected loans to generate explanations for at the current threshold.")
+    # Removed: AI-Powered Explanations for Rejected Loans section
+    # Removed: LLM explanation loop
 
 else:
     st.info("Upload a CSV file and click 'Analyze' to view the dashboard.")
@@ -650,7 +557,7 @@ st.markdown(
     * **Authentication & Authorization (Cognito):** For secure user access to the app and S3, ensuring only authorized users can upload or view sensitive data.
     * **Logging & Monitoring (CloudWatch):** To track app performance, S3 interactions, and potential errors, providing insights for operational management.
 
-    ### 🧠 Large Language Model (LLM) Integration:
-    The LLM (currently OpenAI's GPT-3.5-turbo) is used to provide **Explainable AI (XAI)**. After identifying rejected applicants, the LLM generates concise, human-readable explanations for *why* specific applicants were flagged as high-risk, based on their input features. This helps in understanding and communicating complex model decisions.
+    ### 🧠 Large Language Model (LLM) Integration (Conceptual):
+    While not directly implemented in this version, an LLM could be used to provide **Explainable AI (XAI)**. After identifying rejected applicants, an LLM could generate concise, human-readable explanations for *why* specific applicants were flagged as high-risk, based on their input features. This helps in understanding and communicating complex model decisions.
     """
 )
