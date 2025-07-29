@@ -665,7 +665,7 @@ if 'scored_data' in st.session_state and not st.session_state['scored_data'].emp
             # Ensure bars are in descending order of score
             fig_top10.update_xaxes(categoryorder='array', categoryarray=ordered_top_ids, type='category') 
             fig_top10.update_traces(texttemplate='%{text:.2s}', textposition='outside') # Format text on bars
-            fig_top10.update_layout(xaxis_tickangle=-45) 
+            fig_top10.update_layout(xaxis_tickangle=-45, transition_duration=500) # Added transition
             st.plotly_chart(fig_top10, use_container_width=True)
         else:
             st.info("No approved applicants to display in the top 10 chart based on current threshold.")
@@ -698,7 +698,7 @@ if 'scored_data' in st.session_state and not st.session_state['scored_data'].emp
             # Ensure bars are in ascending order of score
             fig_worst10.update_xaxes(categoryorder='array', categoryarray=ordered_worst_ids, type='category') 
             fig_worst10.update_traces(texttemplate='%{text:.2s}', textposition='outside') # Format text on bars
-            fig_worst10.update_layout(xaxis_tickangle=-45) 
+            fig_worst10.update_layout(xaxis_tickangle=-45, transition_duration=500) # Added transition
             st.plotly_chart(fig_worst10, use_container_width=True)
         else:
             st.info("No rejected applicants to display in the worst 10 chart based on current threshold.")
@@ -716,6 +716,7 @@ if 'scored_data' in st.session_state and not st.session_state['scored_data'].emp
         marginal='box' 
     )
     fig_hist.add_vline(x=st.session_state['approval_threshold'], line_width=2, line_dash="dash", line_color="blue", annotation_text=f"Threshold: {st.session_state['approval_threshold']}", annotation_position="top right")
+    fig_hist.update_layout(transition_duration=500) # Added transition
     st.plotly_chart(fig_hist, use_container_width=True)
 
     # Display the full vulnerable loans table as before
@@ -773,7 +774,7 @@ if 'scored_data' in st.session_state and not st.session_state['scored_data'].emp
             color_discrete_map={'Approved Avg': '#4CAF50', 'Rejected Avg': '#f44336'},
             text_auto='.2s'
         )
-        fig_group1.update_layout(xaxis_tickangle=-45)
+        fig_group1.update_layout(xaxis_tickangle=-45, transition_duration=500) # Added transition
         st.plotly_chart(fig_group1, use_container_width=True)
     else:
         st.info("No features in Group 1 available for plotting.")
@@ -792,7 +793,7 @@ if 'scored_data' in st.session_state and not st.session_state['scored_data'].emp
             color_discrete_map={'Approved Avg': '#4CAF50', 'Rejected Avg': '#f44336'},
             text_auto='.2s'
         )
-        fig_group2.update_layout(xaxis_tickangle=-45)
+        fig_group2.update_layout(xaxis_tickangle=-45, transition_duration=500) # Added transition
         st.plotly_chart(fig_group2, use_container_width=True)
     else:
         st.info("No features in Group 2 available for plotting.")
@@ -811,7 +812,7 @@ if 'scored_data' in st.session_state and not st.session_state['scored_data'].emp
             color_discrete_map={'Approved Avg': '#4CAF50', 'Rejected Avg': '#f44336'},
             text_auto='.2s'
         )
-        fig_group3.update_layout(xaxis_tickangle=-45)
+        fig_group3.update_layout(xaxis_tickangle=-45, transition_duration=500) # Added transition
         st.plotly_chart(fig_group3, use_container_width=True)
     else:
         st.info("No features in Group 3 available for plotting.")
