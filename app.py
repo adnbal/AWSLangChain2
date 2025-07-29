@@ -8,6 +8,7 @@ import time
 import json
 import requests # For making HTTP requests to the LLM API
 import boto3 # Ensure boto3 is imported
+import random # <--- CRITICAL FIX: Added this import
 
 # --- Import scikit-learn components ---
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
