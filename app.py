@@ -10,9 +10,9 @@ st.session_state.setdefault('scored_data', pd.DataFrame())
 
 # --- Page Setup ---
 st.set_page_config(page_title="Credit Scoring Dashboard", layout="wide")
-st.title("📊 Credit Scoring Dashboard with Adjustable Threshold")
+st.title("📊 Credit Scoring Dashboard with Adjustable Threshold & Predictors Summary")
 
-# --- Threshold Slider in Main Layout ---
+# --- Threshold Slider ---
 st.markdown("### 🔍 Set Approval Threshold")
 approval_threshold = st.slider("Adjust the threshold for loan approval", 0, 100, 50, 1)
 st.write(f"Current Approval Threshold: **{approval_threshold}%**")
@@ -30,7 +30,6 @@ NUMERICAL_FEATURES = [
 # --- Simulated Realistic Scoring ---
 def get_credit_score_realistic(df_input):
     df = df_input.copy()
-
     # Fill missing required columns with zeros
     missing_cols = [col for col in NUMERICAL_FEATURES if col not in df.columns]
     for col in missing_cols:
@@ -42,7 +41,7 @@ def get_credit_score_realistic(df_input):
     scores = np.clip(scores, 0, 100)
     return scores
 
-# --- LLM Explanation (Optional) ---
+# --- LLM Explanation ---
 def get_llm_explanation(features_dict, score, decision):
     prompt = f"""
     Explain briefly why this loan has score {score:.2f} and was {decision}.
@@ -73,14 +72,12 @@ if uploaded_file is not None:
     else:
         df = pd.read_csv(uploaded_file)
 
-    # Ensure ID column exists
     if 'ID' not in df.columns:
         df['ID'] = df.index.astype(str)
 
-    # Generate realistic scores
+    # Generate scores & decisions
     scores = get_credit_score_realistic(df)
     decisions = np.where(scores >= approval_threshold, "Approved", "Rejected")
-
     scored_df = pd.DataFrame({'Score': scores, 'Decision': decisions})
     final_df = pd.concat([df, scored_df], axis=1)
     st.session_state['scored_data'] = final_df
@@ -103,46 +100,56 @@ if not st.session_state['scored_data'].empty:
     # --- Score Distribution ---
     st.markdown("---")
     st.subheader("📊 Credit Score Distribution")
-    fig_hist = px.histogram(df_display, x="Score", nbins=20, title="Distribution of Credit Scores", color_discrete_sequence=['#4CAF50'])
-    st.plotly_chart(fig_hist, use_container_width=True)
+    st.plotly_chart(px.histogram(df_display, x="Score", nbins=20, title="Distribution of Credit Scores",
+                                 color_discrete_sequence=['#4CAF50']), use_container_width=True)
 
-    # --- Loan Decision Pie Chart ---
+    # --- Loan Decision Pie ---
     st.subheader("📌 Loan Decision Breakdown")
-    fig_pie = px.pie(df_display, names="Decision", title="Proportion of Approved vs Rejected", color_discrete_sequence=['#66BB6A', '#EF5350'])
-    st.plotly_chart(fig_pie, use_container_width=True)
+    st.plotly_chart(px.pie(df_display, names="Decision", title="Approved vs Rejected",
+                           color_discrete_sequence=['#66BB6A', '#EF5350']), use_container_width=True)
 
     # --- Top & Bottom Scores ---
     st.markdown("---")
-    st.subheader("🏆 Top & Bottom Scores Analysis")
-
+    st.subheader("🏆 Top & Bottom Scores")
     top_scores = df_display.sort_values(by="Score", ascending=False).head(10)
     bottom_scores = df_display.sort_values(by="Score", ascending=True).head(10)
 
-    if top_scores['Score'].sum() == 0 or bottom_scores['Score'].sum() == 0:
-        st.warning("⚠ No valid score variation found. Check your input data or scoring function.")
-    else:
-        # Top Scores (Green)
-        fig_top = px.bar(top_scores.sort_values(by="Score"), x="Score", y="ID",
-                         orientation="h", title="Top 10 Highest Credit Scores",
-                         text="Score", color_discrete_sequence=["green"])
-        fig_top.update_traces(texttemplate='%{text:.2f}', textposition='inside')
-        st.plotly_chart(fig_top, use_container_width=True)
+    if not top_scores.empty:
+        st.plotly_chart(px.bar(top_scores.sort_values(by="Score"), x="Score", y="ID", orientation="h",
+                               title="Top 10 Highest Credit Scores", text="Score",
+                               color_discrete_sequence=["green"]), use_container_width=True)
 
-        # Bottom Scores (Red)
-        fig_bottom = px.bar(bottom_scores.sort_values(by="Score"), x="Score", y="ID",
-                            orientation="h", title="Top 10 Lowest Credit Scores",
-                            text="Score", color_discrete_sequence=["red"])
-        fig_bottom.update_traces(texttemplate='%{text:.2f}', textposition='inside')
-        st.plotly_chart(fig_bottom, use_container_width=True)
+    if not bottom_scores.empty:
+        st.plotly_chart(px.bar(bottom_scores.sort_values(by="Score"), x="Score", y="ID", orientation="h",
+                               title="Top 10 Lowest Credit Scores", text="Score",
+                               color_discrete_sequence=["red"]), use_container_width=True)
 
     # --- Summary Stats ---
     st.markdown("---")
-    st.subheader("📑 Summary Statistics for Credit Scores")
+    st.subheader("📑 Summary Statistics")
     summary_stats = df_display['Score'].describe().to_frame().rename(columns={'Score': 'Value'})
     summary_stats.loc['approval_rate'] = approval_rate
     st.dataframe(summary_stats.style.format("{:.2f}"))
 
-    # --- AI Explanations for Rejected Loans ---
+    # ✅ NEW SECTION: Predictor Summary for Approved vs Rejected
+    st.markdown("---")
+    st.subheader("🔍 Predictor Summary for Approved vs Rejected Loans")
+
+    # Compute average predictor values by Decision
+    predictor_summary = df_display.groupby('Decision')[NUMERICAL_FEATURES].mean().T
+    predictor_summary = predictor_summary.sort_values(by='Approved', ascending=False)  # Sort by Approved values
+
+    st.write("**Average Feature Values by Loan Status:**")
+    st.dataframe(predictor_summary.style.format("{:.2f}"))
+
+    # Visualize top predictors
+    top_features = predictor_summary.head(10).reset_index().melt(id_vars='index', var_name='Decision', value_name='Average Value')
+    fig_features = px.bar(top_features, x='index', y='Average Value', color='Decision', barmode='group',
+                          title="Top 10 Predictors - Avg Value by Loan Status")
+    fig_features.update_layout(xaxis_title="Feature", yaxis_title="Avg Value", xaxis_tickangle=-45)
+    st.plotly_chart(fig_features, use_container_width=True)
+
+    # --- AI Explanations ---
     st.markdown("---")
     st.subheader("🤖 AI Explanations for Rejected Loans")
     rejected = df_display[df_display['Decision'] == 'Rejected']
