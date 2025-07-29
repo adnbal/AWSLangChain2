@@ -3,41 +3,10 @@ import pandas as pd
 import numpy as np
 import io
 import datetime
-import random
+import os
+import time
 import json
-from collections import deque
-import requests # For making HTTP requests to the LLM API (if enabled)
-
-# --- Mock AWS S3 client and boto3 for demonstration purposes ---
-class MockS3Client:
-    def __init__(self):
-        self.buckets = {"my-langchain-demo-bucket": {}} # Initialize with a default bucket
-
-    def upload_fileobj(self, file_obj, bucket, key):
-        if bucket not in self.buckets:
-            self.buckets[bucket] = {}
-        self.buckets[bucket][key] = file_obj.read()
-        file_obj.seek(0) # Reset file pointer after reading
-        # st.success(f"File '{key}' uploaded to S3 bucket '{bucket}' successfully!") # Removed for less clutter
-
-    def list_objects_v2(self, Bucket, Prefix=''):
-        if Bucket not in self.buckets:
-            return {'Contents': []}
-        files = []
-        for key in self.buckets[Bucket]:
-            if key.startswith(Prefix):
-                files.append({'Key': key, 'Size': len(self.buckets[Bucket][key])})
-        return {'Contents': files}
-
-    def get_object(self, Bucket, Key):
-        if Bucket not in self.buckets or Key not in self.buckets[Bucket]:
-            raise Exception(f"File '{Key}' not found in bucket '{Bucket}'")
-        return {'Body': io.BytesIO(self.buckets[Bucket][Key])}
-
-# Initialize MockS3Client only once and store in session state
-if 's3_client' not in st.session_state:
-    st.session_state.s3_client = MockS3Client()
-s3_client = st.session_state.s3_client
+import requests # For making HTTP requests to the LLM API
 
 # --- Import scikit-learn components ---
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
@@ -46,7 +15,7 @@ from sklearn.neural_network import MLPClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer 
 
-# --- Import Plotly for visualizations ---
+# Import Plotly for visualizations
 import plotly.express as px
 
 # --- Initialize session state variables using setdefault for robustness ---
@@ -283,7 +252,7 @@ def get_llm_explanation(features_dict: dict, score: float, decision: str):
     """
     
     try:
-        # Corrected access to OpenAI API key from Streamlit secrets
+        # Get OpenAI API key from Streamlit secrets, accessing the nested structure
         openai_api_key = st.secrets["openai"]["api_key"]
         
         # OpenAI API endpoint for chat completions
@@ -338,21 +307,38 @@ st.title("Credit Scoring Dashboard")
 # --- Sidebar for Data Management and Analysis ---
 st.sidebar.header("Data Management")
 
+s3_client = None
+s3_bucket_name = None
+aws_region_name = None
 
-st.sidebar.success("AWS S3 client initialized!")
+try:
+    # Initialize real boto3 client
+    aws_access_key = st.secrets["aws"]["access_key_id"]
+    aws_secret_key = st.secrets["aws"]["secret_access_key"]
+    s3_bucket_name = st.secrets["aws"]["s3_bucket_name"]
+    aws_region_name = st.secrets["aws"]["region_name"]
 
-# Mock AWS Secrets
-aws_access_key = "****************7UIT"
-aws_secret_key = "************************************6THc"
-s3_bucket_name = "my-langchain-demo-bucket"
-aws_region_name = "ap-southeast-2"
+    s3_client = boto3.client(
+        's3',
+        aws_access_key_id=aws_access_key,
+        aws_secret_access_key=aws_secret_key,
+        region_name=aws_region_name
+    )
+    st.sidebar.success("AWS S3 client initialized!")
 
-st.sidebar.markdown("---")
-st.sidebar.subheader("AWS Secrets Status:")
-st.sidebar.write(f"AWS Access Key ID: `{'*' * (len(aws_access_key) - 4)}{aws_access_key[-4:]}`")
-st.sidebar.write(f"AWS Secret Access Key: `{'*' * (len(aws_secret_key) - 4)}{aws_secret_key[-4:]}`")
-st.sidebar.write(f"S3 Bucket Name: `{s3_bucket_name}`")
-st.sidebar.write(f"AWS Region: `{aws_region_name}`")
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("AWS Secrets Status:")
+    st.sidebar.write(f"AWS Access Key ID: `{'*' * (len(aws_access_key) - 4)}{aws_access_key[-4:]}`")
+    st.sidebar.write(f"AWS Secret Access Key: `{'*' * (len(aws_secret_key) - 4)}{aws_secret_key[-4:]}`")
+    st.sidebar.write(f"S3 Bucket Name: `{s3_bucket_name}`")
+    st.sidebar.write(f"AWS Region: `{aws_region_name}`")
+
+except KeyError as e:
+    st.sidebar.error(f"Secret key not found: {e}. Please ensure your secrets are configured correctly as nested keys under `[aws]` in Streamlit Cloud or `.streamlit/secrets.toml`.")
+    st.stop()
+except Exception as e:
+    st.sidebar.error(f"An error occurred while initializing S3 client: {e}")
+    st.stop()
 
 
 def clear_file_uploader():
@@ -373,6 +359,7 @@ if uploaded_file is not None:
     try:
         with st.spinner(f"Uploading {file_name} to S3..."):
             s3_client.upload_fileobj(uploaded_file, s3_bucket_name, s3_file_key)
+        st.sidebar.success(f"File '{file_name}' uploaded successfully to S3 as '{s3_file_key}'!")
         st.session_state['last_uploaded_s3_key'] = s3_file_key
         # Clear previous analysis data to force re-analysis
         st.session_state['scored_data'] = pd.DataFrame()
@@ -460,6 +447,8 @@ with st.sidebar.form("analysis_trigger_form"):
 
             if not actual_target_col_name:
                 st.error("No target column selected. Please select one from the dropdown.")
+                st.session_state['scored_data'] = pd.DataFrame() # Clear on error
+                st.rerun() # Rerun to clear state and show error
             else:
                 try:
                     with st.spinner(f"Downloading and analyzing '{file_to_analyze}' from S3..."):
