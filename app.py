@@ -7,23 +7,27 @@ import datetime
 import os
 import time
 import json
-import requests
+import requests # For making HTTP requests to the LLM API
 
 # Import scikit-learn components
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
-from sklearn.neural_network import MLPClassifier
+from sklearn.neural_network import MLPClassifier 
 from sklearn.pipeline import Pipeline
-from sklearn.impute import SimpleImputer
+from sklearn.impute import SimpleImputer 
 
-# --- Initialize session state variables ---
-# Use setdefault for robustness to ensure variables exist from the start
+# Import Plotly for visualizations
+import plotly.express as px
+
+# --- Initialize session state variables using setdefault for robustness ---
 st.session_state.setdefault('scored_data', pd.DataFrame())
+st.session_state.setdefault('analyze_triggered', False) # Flag to explicitly trigger analysis
 st.session_state.setdefault('last_uploaded_s3_key', None)
-st.session_state.setdefault('file_uploader_key', 0)
+st.session_state.setdefault('selected_file_for_analysis', None) # Stores the S3 key of the file to analyze
+st.session_state.setdefault('file_uploader_key', 0) 
 st.session_state.setdefault('approval_threshold', 50) # Default approval threshold
 st.session_state.setdefault('uploaded_df_columns', []) # To store columns of the last uploaded file
-st.session_state.setdefault('selected_target_column', 'TARGET') # Default target column name
+st.session_state.setdefault('selected_target_column', 'TARGET') # Default target column name is 'TARGET' for credit.csv
 
 # --- Define Feature Columns for the 'credit.csv' dataset ---
 NUMERICAL_FEATURES = [
@@ -36,7 +40,7 @@ NUMERICAL_FEATURES = [
 CATEGORICAL_FEATURES = [] # No explicit categorical features based on previous analysis
 
 # Dummy target column name for model training
-DUMMY_TARGET_COLUMN_NAME = 'TARGET'
+DUMMY_TARGET_COLUMN_NAME = 'TARGET' 
 
 # --- Simulate Model Training and Preprocessing ---
 # This dummy data is significantly expanded and designed to force the model
@@ -111,12 +115,12 @@ dummy_data_for_training = pd.concat([
 
 # Define preprocessing steps
 numerical_transformer = Pipeline(steps=[
-    ('imputer', SimpleImputer(strategy='mean')),
+    ('imputer', SimpleImputer(strategy='mean')), 
     ('scaler', StandardScaler())
 ])
 
 categorical_transformer = Pipeline(steps=[
-    ('imputer', SimpleImputer(strategy='constant', fill_value='missing_category')),
+    ('imputer', SimpleImputer(strategy='constant', fill_value='missing_category')), 
     ('onehot', OneHotEncoder(handle_unknown='ignore'))
 ])
 
@@ -129,7 +133,7 @@ preprocessor = ColumnTransformer(
 # Create a pipeline: preprocess then apply MLPClassifier (Neural Network)
 model_pipeline = Pipeline(steps=[
     ('preprocessor', preprocessor),
-    ('classifier', MLPClassifier(hidden_layer_sizes=(100, 50), max_iter=500, random_state=42, early_stopping=True, n_iter_no_change=50))
+    ('classifier', MLPClassifier(hidden_layer_sizes=(100, 50), max_iter=500, random_state=42, early_stopping=True, n_iter_no_change=50)) 
 ])
 
 # "Fit" the pipeline on the dummy data
@@ -137,7 +141,7 @@ try:
     # Ensure dummy_features exist in dummy_data_for_training before fitting
     # Exclude 'ID' from features used for training the model
     dummy_features_for_training = [col for col in NUMERICAL_FEATURES + CATEGORICAL_FEATURES if col != 'ID']
-
+    
     missing_dummy_features = [col for col in dummy_features_for_training if col not in dummy_data_for_training.columns]
     if missing_dummy_features:
         st.sidebar.error(f"Missing dummy features for model training: {missing_dummy_features}. Please check dummy_data_for_training.")
@@ -147,11 +151,11 @@ try:
     st.sidebar.success("Simulated ML model (Neural Network) and preprocessor initialized for new data.")
 except Exception as e:
     st.sidebar.error(f"Error initializing simulated ML model: {e}")
-    st.stop()
+    st.stop() 
 
 # --- Credit Scoring Function using the ML Model ---
-@st.cache_data
-def get_credit_score_ml(df_input: pd.DataFrame, approval_threshold: int, actual_target_column: str):
+@st.cache_data 
+def get_credit_score_ml(df_input: pd.DataFrame, approval_threshold: int, actual_target_column: str): 
     """
     Applies the simulated ML model to score a DataFrame of credit applications.
     Performs robust NaN handling and type coercion before passing to the ML pipeline.
@@ -165,21 +169,21 @@ def get_credit_score_ml(df_input: pd.DataFrame, approval_threshold: int, actual_
     for col in features_for_prediction:
         if col not in df_processed.columns:
             if col in NUMERICAL_FEATURES:
-                df_processed[col] = 0.0
+                df_processed[col] = 0.0 
             elif col in CATEGORICAL_FEATURES:
-                df_processed[col] = 'missing_category'
-
+                df_processed[col] = 'missing_category' 
+    
     # Coerce numerical columns to numeric type, converting any non-numeric values to NaN
     for col in NUMERICAL_FEATURES:
         if col in df_processed.columns: # Only process if column exists after previous checks
-            df_processed[col] = pd.to_numeric(df_processed[col], errors='coerce')
+            df_processed[col] = pd.to_numeric(df_processed[col], errors='coerce') 
             df_processed[col] = df_processed[col].fillna(df_processed[col].mean() if not df_processed[col].empty else 0.0) # Fill NaNs after conversion
 
     # Explicitly fill NaNs in categorical columns and ensure they are string type
     for col in CATEGORICAL_FEATURES:
         if col in df_processed.columns: # Only process if column exists after previous checks
             df_processed[col] = df_processed[col].astype(str).replace('nan', 'missing_category')
-            df_processed[col] = df_processed[col].fillna('missing_category')
+            df_processed[col] = df_processed[col].fillna('missing_category') 
 
     # Select and reorder columns to match the training order
     # Ensure only the actual features are passed to the model
@@ -193,12 +197,12 @@ def get_credit_score_ml(df_input: pd.DataFrame, approval_threshold: int, actual_
 
 
     probabilities = model_pipeline.predict_proba(df_processed_for_prediction)
-
+    
     # Assuming class 0 (index 0) is "Good" and class 1 (index 1) is "Bad" (Default)
     # So, score is probability of NOT defaulting (Class 0)
-    scores = probabilities[:, 0] * 100
+    scores = probabilities[:, 0] * 100 
 
-    decisions = np.where(scores >= approval_threshold, "Approved", "Rejected")
+    decisions = np.where(scores >= approval_threshold, "Approved", "Rejected") 
 
     return pd.DataFrame({'Score': scores, 'Decision': decisions})
 
@@ -209,44 +213,44 @@ def get_llm_explanation(features_dict: dict, score: float, decision: str):
     Calls an OpenAI LLM to get an explanation for a loan decision using requests.
     """
     prompt = f"""
-    You are an expert credit risk analyst. Based on the following loan application features,
+    You are an expert credit risk analyst. Based on the following loan application features, 
     explain concisely why this loan received a score of {score:.2f} and was {decision}.
     Focus on 2-3 key factors from the provided features that likely influenced the decision.
-
+    
     Loan Features:
     {json.dumps(features_dict, indent=2)}
-
+    
     Provide a brief, clear explanation (max 50 words).
     """
-
+    
     try:
         # Get OpenAI API key from Streamlit secrets, accessing the nested structure
         openai_api_key = st.secrets["openai"]["api_key"]
-
+        
         # OpenAI API endpoint for chat completions
         apiUrl = "https://api.openai.com/v1/chat/completions"
-
+        
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {openai_api_key}"
         }
-
+        
         payload = {
             "model": "gpt-3.5-turbo", # You can change this to 'gpt-4' or other models if available
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": 100, # Limit response length
             "temperature": 0.7 # Control creativity
         }
-
+        
         response = requests.post(
             apiUrl,
             headers=headers,
             json=payload
         )
         response.raise_for_status() # Raise an exception for HTTP errors (e.g., 4xx or 5xx)
-
+        
         result = response.json()
-
+        
         # OpenAI response parsing
         if result and result.get('choices') and len(result['choices']) > 0 and \
            result['choices'][0].get('message') and result['choices'][0]['message'].get('content'):
@@ -382,7 +386,8 @@ with st.sidebar.form("analysis_trigger_form"):
             st.session_state['uploaded_df_columns'] = temp_df.columns.tolist()
 
             default_target_idx = 0
-            if 'TARGET' in st.session_state['uploaded_df_columns']: # Check for 'TARGET'
+            # Prioritize 'TARGET' as it was the original default for credit.csv
+            if 'TARGET' in st.session_state['uploaded_df_columns']:
                 default_target_idx = st.session_state['uploaded_df_columns'].index('TARGET')
             elif 'default' in st.session_state['uploaded_df_columns']: # Also check for 'default'
                 default_target_idx = st.session_state['uploaded_df_columns'].index('default')
@@ -532,6 +537,10 @@ if not st.session_state['scored_data'].empty:
     numerical_cols_for_avg = [col for col in NUMERICAL_FEATURES if col in df_display.columns]
     
     if numerical_cols_for_avg:
+        # Ensure numerical columns are truly numeric before aggregation
+        for col in numerical_cols_for_avg:
+            df_display[col] = pd.to_numeric(df_display[col], errors='coerce').fillna(0)
+
         avg_features_by_decision = df_display.groupby('Decision')[numerical_cols_for_avg].mean().T
         st.dataframe(avg_features_by_decision)
     else:
