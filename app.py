@@ -6,6 +6,8 @@ import io
 import datetime
 import os
 import time
+import json
+import requests # For making HTTP requests to the LLM API
 
 # Import scikit-learn components
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
@@ -234,6 +236,70 @@ def get_credit_score_ml(df_input: pd.DataFrame, approval_threshold: int, actual_
     return pd.DataFrame({'Score': scores, 'Decision': decisions})
 
 
+# --- LLM Integration for Explanations ---
+def get_llm_explanation(features_dict: dict, score: float, decision: str):
+    """
+    Calls an OpenAI LLM to get an explanation for a loan decision using requests.
+    """
+    prompt = f"""
+    You are an expert credit risk analyst. Based on the following loan application features, 
+    explain concisely why this loan received a score of {score:.2f} and was {decision}.
+    Focus on 2-3 key factors from the provided features that likely influenced the decision.
+    
+    Loan Features:
+    {json.dumps(features_dict, indent=2)}
+    
+    Provide a brief, clear explanation (max 50 words).
+    """
+    
+    try:
+        # Corrected access to OpenAI API key from Streamlit secrets
+        openai_api_key = st.secrets["openai"]["api_key"]
+        
+        # OpenAI API endpoint for chat completions
+        apiUrl = "https://api.openai.com/v1/chat/completions"
+        
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {openai_api_key}"
+        }
+        
+        payload = {
+            "model": "gpt-3.5-turbo", # You can change this to 'gpt-4' or other models if available
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 100, # Limit response length
+            "temperature": 0.7 # Control creativity
+        }
+        
+        response = requests.post(
+            apiUrl,
+            headers=headers,
+            json=payload
+        )
+        response.raise_for_status() # Raise an exception for HTTP errors (e.g., 4xx or 5xx)
+        
+        result = response.json()
+        
+        # OpenAI response parsing
+        if result and result.get('choices') and len(result['choices']) > 0 and \
+           result['choices'][0].get('message') and result['choices'][0]['message'].get('content'):
+            return result['choices'][0]['message']['content']
+        else:
+            return "LLM could not generate an explanation."
+    except KeyError:
+        st.error("OpenAI API Key not found in Streamlit secrets. Please ensure 'openai.api_key' is set in your secrets.toml or Streamlit Cloud secrets.")
+        return "Failed to get explanation from LLM (API Key missing or incorrectly configured)."
+    except requests.exceptions.RequestException as e:
+        st.error(f"Error calling LLM for explanation: {e}")
+        return "Failed to get explanation from LLM."
+    except json.JSONDecodeError:
+        st.error("Failed to decode JSON response from LLM API.")
+        return "Failed to get explanation from LLM (JSON decode error)."
+    except Exception as e:
+        st.error(f"An unexpected error occurred while calling LLM: {e}")
+        return "Failed to get explanation from LLM."
+
+
 # --- Streamlit App Layout ---
 st.set_page_config(page_title="Credit Scoring Dashboard", layout="wide")
 
@@ -334,10 +400,12 @@ def perform_analysis(file_to_analyze, actual_target_col_name, s3_client, s3_buck
             df = pd.read_csv(io.BytesIO(obj['Body'].read()))
             st.write(f"DEBUG: Original columns in loaded CSV: {df.columns.tolist()}")
 
+
             # --- CRITICAL FIX: Handle duplicate column name from CSV ---
             if 'TLDel60Cnt24.1' in df.columns:
                 st.write("DEBUG: Dropping duplicate column 'TLDel60Cnt24.1' found in uploaded CSV.")
                 df = df.drop(columns=['TLDel60Cnt24.1'])
+
 
             # Ensure 'ID' column exists for merging later
             if 'ID' not in df.columns:
@@ -474,7 +542,10 @@ if not st.session_state['scored_data'].empty:
     fig_hist = px.histogram(df_display, x="Score", nbins=20,
                             title="Distribution of Credit Scores",
                             labels={"Score": "Credit Score"},
-                            color_discrete_sequence=['skyblue'])
+                            color_discrete_sequence=['skyblue'],
+                            hover_data={"Score": ':.2f'}, # Add hover data
+                            animation_group="Score") # Add animation group
+    fig_hist.update_layout(transition_duration=500) # Smooth transition
     st.plotly_chart(fig_hist, use_container_width=True)
 
     st.markdown("---")
@@ -485,7 +556,10 @@ if not st.session_state['scored_data'].empty:
     decision_counts.columns = ['Decision', 'Count']
     fig_pie = px.pie(decision_counts, values='Count', names='Decision',
                      title='Proportion of Approved vs. Rejected Loans',
-                     color_discrete_sequence=['lightgreen', 'salmon'])
+                     color_discrete_sequence=['lightgreen', 'salmon'],
+                     hover_data={'Count': ':.0f'}, # Add hover data
+                     animation_group="Decision") # Add animation group
+    fig_pie.update_layout(transition_duration=500) # Smooth transition
     st.plotly_chart(fig_pie, use_container_width=True)
 
     st.markdown("---")
@@ -498,8 +572,20 @@ if not st.session_state['scored_data'].empty:
         for col in features_group1:
             df_display[col] = pd.to_numeric(df_display[col], errors='coerce').fillna(0)
         
-        avg_features_by_decision_group1 = df_display.groupby('Decision')[features_group1].mean().T
-        st.dataframe(avg_features_by_decision_group1)
+        avg_features_by_decision_group1 = df_display.groupby('Decision')[features_group1].mean().T.reset_index()
+        avg_features_by_decision_group1.columns = ['Feature', 'Approved', 'Rejected']
+        
+        # Melt for Plotly bar chart
+        df_plot_group1 = avg_features_by_decision_group1.melt(id_vars='Feature', var_name='Decision Type', value_name='Average Value')
+
+        fig_group1 = px.bar(df_plot_group1, x='Feature', y='Average Value', color='Decision Type', barmode='group',
+                            title='Average Counts & Indicators by Decision',
+                            labels={'Average Value': 'Average Count/Indicator'},
+                            color_discrete_sequence=['#636EFA', '#EF553B'], # Example colors
+                            hover_data={'Average Value': ':.2f'}, # Add hover data
+                            animation_group="Feature") # Add animation group
+        fig_group1.update_layout(transition_duration=500) # Smooth transition
+        st.plotly_chart(fig_group1, use_container_width=True)
     else:
         st.info("No features in Group 1 available for showing average values by decision.")
 
@@ -513,8 +599,20 @@ if not st.session_state['scored_data'].empty:
         for col in features_group2:
             df_display[col] = pd.to_numeric(df_display[col], errors='coerce').fillna(0)
 
-        avg_features_by_decision_group2 = df_display.groupby('Decision')[features_group2].mean().T
-        st.dataframe(avg_features_by_decision_group2)
+        avg_features_by_decision_group2 = df_display.groupby('Decision')[features_group2].mean().T.reset_index()
+        avg_features_by_decision_group2.columns = ['Feature', 'Approved', 'Rejected']
+        
+        # Melt for Plotly bar chart
+        df_plot_group2 = avg_features_by_decision_group2.melt(id_vars='Feature', var_name='Decision Type', value_name='Average Value')
+
+        fig_group2 = px.bar(df_plot_group2, x='Feature', y='Average Value', color='Decision Type', barmode='group',
+                            title='Average Time & Percentages by Decision',
+                            labels={'Average Value': 'Average Value'},
+                            color_discrete_sequence=['#00CC96', '#FECB52'], # Example colors
+                            hover_data={'Average Value': ':.2f'}, # Add hover data
+                            animation_group="Feature") # Add animation group
+        fig_group2.update_layout(transition_duration=500) # Smooth transition
+        st.plotly_chart(fig_group2, use_container_width=True)
     else:
         st.info("No features in Group 2 available for showing average values by decision.")
 
@@ -528,8 +626,20 @@ if not st.session_state['scored_data'].empty:
         for col in features_group3:
             df_display[col] = pd.to_numeric(df_display[col], errors='coerce').fillna(0)
 
-        avg_features_by_decision_group3 = df_display.groupby('Decision')[features_group3].mean().T
-        st.dataframe(avg_features_by_decision_group3)
+        avg_features_by_decision_group3 = df_display.groupby('Decision')[features_group3].mean().T.reset_index()
+        avg_features_by_decision_group3.columns = ['Feature', 'Approved', 'Rejected']
+        
+        # Melt for Plotly bar chart
+        df_plot_group3 = avg_features_by_decision_group3.melt(id_vars='Feature', var_name='Decision Type', value_name='Average Value')
+
+        fig_group3 = px.bar(df_plot_group3, x='Feature', y='Average Value', color='Decision Type', barmode='group',
+                            title='Average Sums & Max Sums by Decision',
+                            labels={'Average Value': 'Average Value'},
+                            color_discrete_sequence=['#FF6692', '#B6E880'], # Example colors
+                            hover_data={'Average Value': ':.2f'}, # Add hover data
+                            animation_group="Feature") # Add animation group
+        fig_group3.update_layout(transition_duration=500) # Smooth transition
+        st.plotly_chart(fig_group3, use_container_width=True)
     else:
         st.info("No features in Group 3 available for showing average values by decision.")
 
@@ -538,6 +648,41 @@ if not st.session_state['scored_data'].empty:
     # Display the scored data table
     st.subheader("Scored Credit Data")
     st.dataframe(df_display)
+
+    st.markdown("---")
+    st.header("AI-Powered Explanations for Rejected Loans")
+    st.info("Click on a rejected loan's ID to get an AI-generated explanation for the decision.")
+
+    vulnerable_loans = df_display[df_display['Decision'] == 'Rejected'].sort_values(by='Score', ascending=True)
+
+    if not vulnerable_loans.empty:
+        for index, row in vulnerable_loans.iterrows():
+            loan_id = row['ID']
+            score = row['Score']
+            decision = row['Decision']
+            
+            # Prepare features for LLM explanation
+            loan_features = {}
+            # Iterate over all defined features to ensure consistency
+            all_relevant_features = NUMERICAL_FEATURES + CATEGORICAL_FEATURES
+            for feature_name in all_relevant_features:
+                if feature_name in row: # Check if the feature exists in the current row
+                    value = row[feature_name]
+                    if feature_name in NUMERICAL_FEATURES:
+                        # Ensure numerical values are correctly handled, including NaNs
+                        loan_features[feature_name] = pd.to_numeric(value, errors='coerce').fillna(0)
+                    else:
+                        # Ensure categorical values are strings and handle potential NaNs
+                        loan_features[feature_name] = str(value).replace('nan', 'missing_category')
+            # Remove any features that might still be NaN or None after processing, if desired
+            loan_features = {k: v for k, v in loan_features.items() if pd.notna(v) and v is not None}
+
+            with st.expander(f"Explain why Loan ID: **{loan_id}** (Score: {score:.2f}, Decision: {decision}) was rejected"):
+                with st.spinner(f"Generating explanation for {loan_id}..."):
+                    explanation = get_llm_explanation(loan_features, score, decision)
+                    st.markdown(explanation)
+    else:
+        st.info("No rejected loans to generate explanations for at the current threshold.")
 
 else:
     st.info("Upload a CSV file and click 'Analyze' to view the dashboard.")
@@ -558,7 +703,7 @@ st.markdown(
     * **Authentication & Authorization (Cognito):** For secure user access to the app and S3, ensuring only authorized users can upload or view sensitive data.
     * **Logging & Monitoring (CloudWatch):** To track app performance, S3 interactions, and potential errors, providing insights for operational management.
 
-    ### 🧠 Large Language Model (LLM) Integration (Conceptual):
-    While not directly implemented in this version, an LLM could be used to provide **Explainable AI (XAI)**. After identifying rejected applicants, an LLM could generate concise, human-readable explanations for *why* specific applicants were flagged as high-risk, based on their input features. This helps in understanding and communicating complex model decisions.
+    ### 🧠 Large Language Model (LLM) Integration:
+    The LLM (currently OpenAI's GPT-3.5-turbo) is used to provide **Explainable AI (XAI)**. After identifying rejected applicants, the LLM generates concise, human-readable explanations for *why* specific applicants were flagged as high-risk, based on their input features. This helps in understanding and communicating complex model decisions.
     """
 )
